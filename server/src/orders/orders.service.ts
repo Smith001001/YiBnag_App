@@ -45,6 +45,30 @@ const MOCK_ORDER_TEMPLATES = [
     pickup_location: { latitude: 39.9122, longitude: 116.4154, address: '菜鸟驿站' },
     delivery_location: { latitude: 39.9132, longitude: 116.4164, address: 'A教学楼' },
   },
+  {
+    title: '代取外卖 - 瑞幸咖啡',
+    description: '帮忙从瑞幸咖啡取饮料，送到实验楼',
+    type: 'delivery_food',
+    price: 5,
+    pickup_location: { latitude: 39.9142, longitude: 116.4174, address: '瑞幸咖啡' },
+    delivery_location: { latitude: 39.9152, longitude: 116.4184, address: '实验楼' },
+  },
+  {
+    title: '代拿快递 - 邮政局',
+    description: '帮忙从邮政局取包裹，送到体育馆',
+    type: 'delivery_pickup',
+    price: 6,
+    pickup_location: { latitude: 39.9162, longitude: 116.4194, address: '邮政局' },
+    delivery_location: { latitude: 39.9172, longitude: 116.4204, address: '体育馆' },
+  },
+  {
+    title: '代取外卖 - 喜茶',
+    description: '帮忙从喜茶取奶茶，送到行政楼',
+    type: 'delivery_food',
+    price: 8,
+    pickup_location: { latitude: 39.9182, longitude: 116.4214, address: '喜茶' },
+    delivery_location: { latitude: 39.9192, longitude: 116.4224, address: '行政楼' },
+  },
 ];
 
 // 系统模拟用户ID
@@ -56,13 +80,13 @@ export class OrdersService implements OnModuleInit {
 
   // 模块初始化时确保有模拟订单
   async onModuleInit() {
-    await this.ensureMockOrders();
+    await this.ensureSystemUser();
+    await this.checkAndRefillMockOrders();
   }
 
-  // 确保数据库中有足够的模拟订单
-  async ensureMockOrders() {
+  // 确保系统用户存在
+  private async ensureSystemUser() {
     try {
-      // 检查是否有系统用户
       const { data: systemUser } = await this.client
         .from('users')
         .select('id')
@@ -70,7 +94,6 @@ export class OrdersService implements OnModuleInit {
         .single();
 
       if (!systemUser) {
-        // 创建系统用户
         await this.client.from('users').insert({
           id: SYSTEM_USER_ID,
           openid: 'system-mock-user',
@@ -79,42 +102,15 @@ export class OrdersService implements OnModuleInit {
         });
         console.log('✅ 系统模拟用户已创建');
       }
-
-      // 检查当前pending订单数量
-      const { data: pendingOrders } = await this.client
-        .from('orders')
-        .select('id')
-        .eq('status', 'pending');
-
-      const pendingCount = pendingOrders?.length || 0;
-      const minOrders = 3; // 至少保持3个模拟订单
-
-      if (pendingCount < minOrders) {
-        // 需要补充模拟订单
-        const ordersToCreate = minOrders - pendingCount;
-        console.log(`📦 当前待接订单数量: ${pendingCount}，将创建 ${ordersToCreate} 个模拟订单`);
-
-        for (let i = 0; i < ordersToCreate; i++) {
-          const template = MOCK_ORDER_TEMPLATES[i % MOCK_ORDER_TEMPLATES.length];
-          await this.client.from('orders').insert({
-            publisher_id: SYSTEM_USER_ID,
-            title: template.title,
-            description: template.description,
-            type: template.type,
-            price: template.price,
-            pickup_location: template.pickup_location,
-            delivery_location: template.delivery_location,
-            status: 'pending',
-            images: [],
-          });
-        }
-        console.log(`✅ 已创建 ${ordersToCreate} 个模拟订单`);
-      } else {
-        console.log(`📦 当前待接订单数量: ${pendingCount}，无需创建模拟订单`);
-      }
     } catch (error) {
-      console.error('初始化模拟订单失败:', error);
+      console.error('创建系统用户失败:', error);
     }
+  }
+
+  // 确保数据库中有足够的模拟订单（服务启动时使用，已废弃）
+  async ensureMockOrders() {
+    await this.ensureSystemUser();
+    await this.checkAndRefillMockOrders();
   }
 
   async createOrder(orderData: InsertOrder): Promise<Order> {
@@ -218,6 +214,11 @@ export class OrdersService implements OnModuleInit {
       throw new Error(`Failed to update order: ${error.message}`);
     }
 
+    // 如果订单被取消，检查并补充模拟订单
+    if (updateData.status === 'cancelled') {
+      await this.checkAndRefillMockOrders();
+    }
+
     return data;
   }
 
@@ -237,7 +238,57 @@ export class OrdersService implements OnModuleInit {
       throw new Error(`Failed to accept order: ${error.message}`);
     }
 
+    // 接单成功后，检查并补充模拟订单
+    await this.checkAndRefillMockOrders();
+
     return data;
+  }
+
+  // 检查并补充模拟订单（保持至少3个待接订单）
+  private async checkAndRefillMockOrders() {
+    try {
+      // 检查当前pending订单数量
+      const { data: pendingOrders } = await this.client
+        .from('orders')
+        .select('id')
+        .eq('status', 'pending');
+
+      const pendingCount = pendingOrders?.length || 0;
+      const minOrders = 3;
+
+      if (pendingCount < minOrders) {
+        const ordersToCreate = minOrders - pendingCount;
+        console.log(`📦 检测到待接订单不足，将补充 ${ordersToCreate} 个模拟订单`);
+
+        // 随机选择模板创建新订单
+        const usedIndices = new Set<number>();
+        for (let i = 0; i < ordersToCreate; i++) {
+          let randomIndex;
+          // 避免重复选择同一个模板
+          do {
+            randomIndex = Math.floor(Math.random() * MOCK_ORDER_TEMPLATES.length);
+          } while (usedIndices.has(randomIndex) && usedIndices.size < MOCK_ORDER_TEMPLATES.length);
+          
+          usedIndices.add(randomIndex);
+          const template = MOCK_ORDER_TEMPLATES[randomIndex];
+          
+          await this.client.from('orders').insert({
+            publisher_id: SYSTEM_USER_ID,
+            title: template.title,
+            description: template.description,
+            type: template.type,
+            price: template.price,
+            pickup_location: template.pickup_location,
+            delivery_location: template.delivery_location,
+            status: 'pending',
+            images: [],
+          });
+        }
+        console.log(`✅ 已补充 ${ordersToCreate} 个模拟订单`);
+      }
+    } catch (error) {
+      console.error('补充模拟订单失败:', error);
+    }
   }
 
   async getOrdersByDistance(

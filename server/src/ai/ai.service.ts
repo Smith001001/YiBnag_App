@@ -232,29 +232,44 @@ ${ordersText}
   "intent": "意图类型",
   "confidence": 0.95,
   "extractedInfo": {
-    "type": "订单类型（delivery_pickup/delivery_food/errand/other）",
-    "title": "订单标题",
-    "description": "详细描述（不要重复用户输入，提炼核心需求）",
-    "price": 价格数字（纯数字）,
-    "pickupAddress": "取货地点（只提取地点名称，不要包含其他内容）",
-    "deliveryAddress": "送达地点（只提取地点名称，不要包含其他内容）"
+    "type": "订单类型（delivery_pickup/delivery_food/errand/other，如果用户提到快递则为delivery_pickup，提到外卖则为delivery_food）",
+    "title": "订单标题（用户提到的简短描述）",
+    "description": "详细描述（提炼用户的核心需求）",
+    "price": 价格数字（必须是用户明确提到的数字，如果用户没说价格则不要填写！）,
+    "pickupAddress": "取货地点（只提取用户明确提到的地点名称）",
+    "deliveryAddress": "送达地点（只提取用户明确提到的地点名称）"
   },
   "response": "给用户的回复"
 }
 
-【重要规则】：
-1. 提取地点信息时，只返回地点名称，不要包含其他内容
-   - 正确示例："在图书馆取货，送到A教" → pickupAddress: "图书馆", deliveryAddress: "A教"
-   - 错误示例：pickupAddress: "在图书馆取货" ❌
-2. 价格只返回数字，不要带单位
-3. 如果用户说"确认"/"发布"/"是的"，intent 应该是 confirm
-4. 如果用户说"取消"，intent 应该是 cancel
-5. 如果用户说"修改"，intent 应该是 modify
-6. 回复要简洁友好`;
+【极其重要的规则 - 必须严格遵守】：
+
+1. **严禁捏造任何信息**：
+   - 只提取用户消息中明确提到的信息
+   - 如果用户没说价格，price 必须为 null，不能自己填写任何数字
+   - 如果用户没说取货地点，pickupAddress 必须为 null
+   - 如果用户没说送达地点，deliveryAddress 必须为 null
+   - 绝对禁止自己编造、猜测或默认任何用户未提及的信息！
+
+2. **地点提取规则**：
+   - "在图书馆取货，送到A教" → pickupAddress: "图书馆", deliveryAddress: "A教"
+   - "帮我去食堂拿外卖送到宿舍" → pickupAddress: "食堂", deliveryAddress: "宿舍"
+   - 如果只说"帮我拿快递"而没有提地点 → pickupAddress: null, deliveryAddress: null
+
+3. **价格提取规则**：
+   - "11块钱"、"5元"、"报酬10块" → price: 数字
+   - 用户没提到价格 → price: null（不要填写默认值！）
+
+4. **意图识别**：
+   - "确认"/"发布"/"是的" → intent: "confirm"
+   - "取消" → intent: "cancel"
+   - "修改" → intent: "modify"
+
+5. **回复风格**：简洁友好，当信息不完整时引导用户补充`;
 
     const userMessage = `用户消息：${message}${contextStr}
 
-请分析用户意图并返回JSON格式结果。`;
+请严格按规则分析用户意图，只提取用户明确提到的信息，返回JSON格式结果。`;
 
     try {
       const response = await this.llmClient.invoke([

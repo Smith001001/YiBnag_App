@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Network } from '@/network';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { MapPin, Package, Utensils, ShoppingBag, CircleCheck, CircleX, ArrowLeft } from 'lucide-react-taro';
+import { MapPin, Package, Utensils, ShoppingBag, CircleCheck, CircleX, ArrowLeft, Send, Inbox } from 'lucide-react-taro';
 
 type Order = {
   id: string;
@@ -36,21 +36,24 @@ const STATUS_MAP: Record<string, { label: string; color: string; icon: any }> = 
 };
 
 const HistoryPage = () => {
-  const [activeTab, setActiveTab] = useState('completed');
-  const [completedOrders, setCompletedOrders] = useState<Order[]>([]);
-  const [cancelledOrders, setCancelledOrders] = useState<Order[]>([]);
+  const [activeTab, setActiveTab] = useState('published');
+  const [publishedOrders, setPublishedOrders] = useState<Order[]>([]);
+  const [acceptedOrders, setAcceptedOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
 
   useDidShow(() => {
-    loadOrders();
+    loadUserInfo();
   });
 
-  const loadOrders = async () => {
+  const loadUserInfo = async () => {
     const storedUser = Taro.getStorageSync('userInfo');
-    if (!storedUser) return;
-    
-    const user = JSON.parse(storedUser);
+    if (storedUser) {
+      const user = JSON.parse(storedUser);
+      await loadOrders(user);
+    }
+  };
 
+  const loadOrders = async (user: { id: string }) => {
     setLoading(true);
     try {
       // 加载我发布的订单（已完成和已取消）
@@ -63,27 +66,22 @@ const HistoryPage = () => {
         url: `/api/orders?accepterId=${user.id}&limit=100`,
       });
 
-      const allOrders: Order[] = [];
+      // 只取已完成和已取消的订单
+      const historyStatuses = ['completed', 'cancelled'];
+
+      let published: Order[] = [];
+      let accepted: Order[] = [];
 
       if (publishedRes.data?.code === 200) {
-        allOrders.push(...(publishedRes.data.data || []));
+        published = (publishedRes.data.data || []).filter((o: Order) => historyStatuses.includes(o.status));
       }
 
       if (acceptedRes.data?.code === 200) {
-        allOrders.push(...(acceptedRes.data.data || []));
+        accepted = (acceptedRes.data.data || []).filter((o: Order) => historyStatuses.includes(o.status));
       }
 
-      // 去重（根据订单ID）
-      const uniqueOrders = Array.from(
-        new Map(allOrders.map(order => [order.id, order])).values()
-      );
-
-      // 分类
-      const completed = uniqueOrders.filter(o => o.status === 'completed');
-      const cancelled = uniqueOrders.filter(o => o.status === 'cancelled');
-
-      setCompletedOrders(completed);
-      setCancelledOrders(cancelled);
+      setPublishedOrders(published);
+      setAcceptedOrders(accepted);
     } catch (error) {
       console.error('加载订单失败:', error);
     } finally {
@@ -163,30 +161,54 @@ const HistoryPage = () => {
       </View>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="p-4">
-        <TabsList className="grid w-full grid-cols-2 mb-4">
-          <TabsTrigger value="completed" className="data-[state=active]:bg-blue-500 data-[state=active]:text-white">
-            已完成 ({completedOrders.length})
+        <TabsList className="grid w-full grid-cols-3 mb-4">
+          <TabsTrigger value="published" className="data-[state=active]:bg-blue-500 data-[state=active]:text-white">
+            <Inbox size={14} className="mr-1" />
+            我发布的 ({publishedOrders.length})
+          </TabsTrigger>
+          <TabsTrigger value="accepted" className="data-[state=active]:bg-blue-500 data-[state=active]:text-white">
+            <Send size={14} className="mr-1" />
+            我接的单 ({acceptedOrders.length})
           </TabsTrigger>
           <TabsTrigger value="cancelled" className="data-[state=active]:bg-blue-500 data-[state=active]:text-white">
-            已取消 ({cancelledOrders.length})
+            <CircleX size={14} className="mr-1" />
+            已取消 ({[...publishedOrders, ...acceptedOrders].filter(o => o.status === 'cancelled').length})
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="completed" className="mt-4">
+        <TabsContent value="published" className="mt-4">
           {loading ? (
             <View className="text-center py-8">
               <Text className="text-gray-500">加载中...</Text>
             </View>
-          ) : completedOrders.length === 0 ? (
+          ) : publishedOrders.filter(o => o.status === 'completed').length === 0 ? (
             <Card>
               <CardContent className="p-8 text-center">
-                <CircleCheck size={48} className="mx-auto text-gray-400 mb-4" color="#22C55E" />
-                <Text className="block text-gray-500 mb-2">暂无已完成订单</Text>
-                <Text className="block text-xs text-gray-400">完成订单后将在这里显示</Text>
+                <Inbox size={48} className="mx-auto text-gray-400 mb-4" color="#3B82F6" />
+                <Text className="block text-gray-500 mb-2">暂无发布记录</Text>
+                <Text className="block text-xs text-gray-400">您发布的订单完成后将在这里显示</Text>
               </CardContent>
             </Card>
           ) : (
-            completedOrders.map((order) => renderOrderCard(order))
+            publishedOrders.filter(o => o.status === 'completed').map((order) => renderOrderCard(order))
+          )}
+        </TabsContent>
+
+        <TabsContent value="accepted" className="mt-4">
+          {loading ? (
+            <View className="text-center py-8">
+              <Text className="text-gray-500">加载中...</Text>
+            </View>
+          ) : acceptedOrders.filter(o => o.status === 'completed').length === 0 ? (
+            <Card>
+              <CardContent className="p-8 text-center">
+                <Send size={48} className="mx-auto text-gray-400 mb-4" color="#22C55E" />
+                <Text className="block text-gray-500 mb-2">暂无接单记录</Text>
+                <Text className="block text-xs text-gray-400">您完成的订单将在这里显示</Text>
+              </CardContent>
+            </Card>
+          ) : (
+            acceptedOrders.filter(o => o.status === 'completed').map((order) => renderOrderCard(order))
           )}
         </TabsContent>
 
@@ -195,7 +217,7 @@ const HistoryPage = () => {
             <View className="text-center py-8">
               <Text className="text-gray-500">加载中...</Text>
             </View>
-          ) : cancelledOrders.length === 0 ? (
+          ) : [...publishedOrders, ...acceptedOrders].filter(o => o.status === 'cancelled').length === 0 ? (
             <Card>
               <CardContent className="p-8 text-center">
                 <CircleX size={48} className="mx-auto text-gray-400 mb-4" color="#9CA3AF" />
@@ -204,7 +226,9 @@ const HistoryPage = () => {
               </CardContent>
             </Card>
           ) : (
-            cancelledOrders.map((order) => renderOrderCard(order))
+            [...publishedOrders, ...acceptedOrders]
+              .filter(o => o.status === 'cancelled')
+              .map((order) => renderOrderCard(order))
           )}
         </TabsContent>
       </Tabs>

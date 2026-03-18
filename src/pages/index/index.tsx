@@ -499,75 +499,94 @@ const IndexPage = () => {
   // 处理发布订单意图
   const handleAiPublishFlow = async (_userMessage: string, extractedInfo: any, _aiResponse: string) => {
     try {
-      // 如果有提取到的信息，直接使用
-      if (extractedInfo && (extractedInfo.type || extractedInfo.title || extractedInfo.description || extractedInfo.pickupAddress || extractedInfo.deliveryAddress)) {
-        const pickupLocation = extractedInfo.pickupAddress 
-          ? { latitude: 0, longitude: 0, address: extractedInfo.pickupAddress }
-          : (userLocation ? { ...userLocation, address: '当前位置' } : { latitude: 0, longitude: 0, address: '待确认' });
-        const deliveryLocation = extractedInfo.deliveryAddress
-          ? { latitude: 0, longitude: 0, address: extractedInfo.deliveryAddress }
-          : { latitude: 0, longitude: 0, address: '待确认' };
+      // 检查是否有任何提取到的信息
+      const hasAnyInfo = extractedInfo && (
+        extractedInfo.type || 
+        extractedInfo.title || 
+        extractedInfo.description || 
+        extractedInfo.pickupAddress || 
+        extractedInfo.deliveryAddress ||
+        extractedInfo.price
+      );
 
-        // 使用 snake_case 存储在 aiOrderData 中（与后端返回格式一致）
+      if (hasAnyInfo) {
+        // 构建订单数据 - 只使用用户提供的信息，不使用默认值
         const orderData = {
           publisher_id: userInfo?.id,
-          type: extractedInfo.type || 'delivery_pickup',
-          title: extractedInfo.title || '校园互助订单',
+          type: extractedInfo.type || null,
+          title: extractedInfo.title || null,
           description: extractedInfo.description || _userMessage,
-          pickup_location: pickupLocation,
-          delivery_location: deliveryLocation,
-          price: extractedInfo.price || 5,
+          pickup_location: extractedInfo.pickupAddress 
+            ? { latitude: 0, longitude: 0, address: extractedInfo.pickupAddress }
+            : null,
+          delivery_location: extractedInfo.deliveryAddress
+            ? { latitude: 0, longitude: 0, address: extractedInfo.deliveryAddress }
+            : null,
+          price: extractedInfo.price || null, // 必须用户自己提供，不能用默认值
           images: [],
         };
 
-        // 检查信息是否完整
+        // 检查缺失的必填信息
         const missingInfo: string[] = [];
-        if (!extractedInfo.pickupAddress) {
+        if (!orderData.type) {
+          missingInfo.push('订单类型（代拿快递/代取外卖）');
+        }
+        if (!orderData.pickup_location) {
           missingInfo.push('取货地点');
         }
-        if (!extractedInfo.deliveryAddress) {
+        if (!orderData.delivery_location) {
           missingInfo.push('送达地点');
         }
+        if (!orderData.price) {
+          missingInfo.push('报酬金额');
+        }
+
+        // 保存当前订单数据
+        setAiOrderData(orderData);
 
         if (missingInfo.length > 0) {
-          // 保存当前订单数据，等待用户补充
-          setAiOrderData(orderData);
+          // 信息不完整，引导用户补充
+          const currentInfo: string[] = [];
+          if (orderData.type) {
+            currentInfo.push(`📋 类型：${orderData.type === 'delivery_pickup' ? '代拿快递' : orderData.type === 'delivery_food' ? '代取外卖' : '其他'}`);
+          }
+          if (orderData.price) {
+            currentInfo.push(`💰 报酬：¥${orderData.price}`);
+          }
+          if (orderData.pickup_location) {
+            currentInfo.push(`📍 取货：${orderData.pickup_location.address}`);
+          }
+          if (orderData.delivery_location) {
+            currentInfo.push(`📍 送达：${orderData.delivery_location.address}`);
+          }
+
+          const infoText = currentInfo.length > 0 
+            ? `当前已记录的信息：\n${currentInfo.join('\n')}\n\n` 
+            : '';
+          
           setAiConversations(prev => [...prev, {
             role: 'assistant',
-            content: `好的，我理解了！当前订单信息：\n\n📋 类型：${orderData.type === 'delivery_pickup' ? '代拿快递' : orderData.type === 'delivery_food' ? '代取外卖' : '其他'}\n💰 报酬：¥${orderData.price}\n${orderData.pickup_location.address !== '待确认' ? `📍 取货：${orderData.pickup_location.address}\n` : ''}${orderData.delivery_location.address !== '待确认' ? `📍 送达：${orderData.delivery_location.address}\n` : ''}\n还需要您提供：\n${missingInfo.map((info, i) => `${i + 1}. ${info}`).join('\n')}\n\n请补充信息，或回复"确认"直接发布。`
+            content: `${infoText}还需要您提供以下信息：\n${missingInfo.map((info, i) => `${i + 1}. ${info}`).join('\n')}\n\n请补充完整后才能发布订单。`
           }]);
         } else {
-          // 信息完整，保存订单数据并询问确认
-          setAiOrderData(orderData);
+          // 所有必填信息都已提供，可以确认发布
           setAiConversations(prev => [...prev, {
             role: 'assistant',
-            content: `好的，订单信息如下：\n\n📋 ${orderData.title}\n💰 报酬：¥${orderData.price}\n📍 取货：${orderData.pickup_location.address}\n📍 送达：${orderData.delivery_location.address}\n\n请回复"确认"发布订单，或"修改"调整信息，或"取消"放弃发布。`
+            content: `好的，订单信息已完整：\n\n📋 类型：${orderData.type === 'delivery_pickup' ? '代拿快递' : orderData.type === 'delivery_food' ? '代取外卖' : '其他'}\n💰 报酬：¥${orderData.price}\n📍 取货：${orderData.pickup_location?.address}\n📍 送达：${orderData.delivery_location?.address}\n\n请回复"确认"发布订单，或"修改"调整信息，或"取消"放弃发布。`
           }]);
         }
       } else {
-        // 没有提取到足够信息，保存一个基础订单并引导用户补充
-        const orderData = {
-          publisher_id: userInfo?.id,
-          type: 'delivery_pickup',
-          title: '校园互助订单',
-          description: _userMessage,
-          pickup_location: userLocation ? { ...userLocation, address: '待确认' } : { latitude: 0, longitude: 0, address: '待确认' },
-          delivery_location: { latitude: 0, longitude: 0, address: '待确认' },
-          price: 5,
-          images: [],
-        };
-
-        setAiOrderData(orderData);
+        // 没有提取到任何信息，引导用户提供
         setAiConversations(prev => [...prev, {
           role: 'assistant',
-          content: `好的，我来帮您发布订单！请告诉我：\n\n1. 取货地点在哪里？\n2. 送到哪里？\n3. 愿意付多少报酬？\n\n您可以一次性告诉我，比如"在图书馆取货，送到A教，11块钱"。`
+          content: `好的，我来帮您发布订单！请告诉我以下信息：\n\n1. 订单类型（代拿快递/代取外卖）\n2. 取货地点\n3. 送达地点\n4. 报酬金额\n\n您可以一次性告诉我，比如"帮我拿个快递，在图书馆取货，送到A教，11块钱"。`
         }]);
       }
     } catch (error) {
       console.error('发布订单处理失败:', error);
       setAiConversations(prev => [...prev, {
         role: 'assistant',
-        content: '抱歉，处理遇到了问题。请告诉我：取货地点、送达地点、报酬，我会帮您创建订单。'
+        content: '抱歉，处理遇到了问题。请告诉我：订单类型、取货地点、送达地点、报酬金额，我会帮您创建订单。'
       }]);
     }
   };
@@ -582,14 +601,14 @@ const IndexPage = () => {
       return;
     }
 
-    // 更新订单数据
+    // 更新订单数据 - 只更新用户提供的信息
     const updatedOrder = { ...aiOrderData };
     
     if (extractedInfo?.pickupAddress) {
-      updatedOrder.pickup_location = { ...updatedOrder.pickup_location, address: extractedInfo.pickupAddress };
+      updatedOrder.pickup_location = { latitude: 0, longitude: 0, address: extractedInfo.pickupAddress };
     }
     if (extractedInfo?.deliveryAddress) {
-      updatedOrder.delivery_location = { ...updatedOrder.delivery_location, address: extractedInfo.deliveryAddress };
+      updatedOrder.delivery_location = { latitude: 0, longitude: 0, address: extractedInfo.deliveryAddress };
     }
     if (extractedInfo?.price) {
       updatedOrder.price = extractedInfo.price;
@@ -603,24 +622,50 @@ const IndexPage = () => {
 
     setAiOrderData(updatedOrder);
 
-    // 检查是否还有缺失信息
+    // 检查是否还有缺失的必填信息
     const missingInfo: string[] = [];
-    if (!updatedOrder.pickup_location?.address || updatedOrder.pickup_location.address === '待确认') {
+    if (!updatedOrder.type) {
+      missingInfo.push('订单类型（代拿快递/代取外卖）');
+    }
+    if (!updatedOrder.pickup_location?.address) {
       missingInfo.push('取货地点');
     }
-    if (!updatedOrder.delivery_location?.address || updatedOrder.delivery_location.address === '待确认') {
+    if (!updatedOrder.delivery_location?.address) {
       missingInfo.push('送达地点');
+    }
+    if (!updatedOrder.price) {
+      missingInfo.push('报酬金额');
     }
 
     if (missingInfo.length === 0) {
+      // 所有信息已完整
       setAiConversations(prev => [...prev, {
         role: 'assistant',
-        content: `好的，信息已更新。当前订单信息：\n\n📋 ${updatedOrder.title}\n💰 报酬：¥${updatedOrder.price}\n📍 取货：${updatedOrder.pickup_location?.address}\n📍 送达：${updatedOrder.delivery_location?.address}\n\n请回复"确认"发布订单，或"修改"调整信息，或"取消"放弃发布。`
+        content: `好的，信息已更新。订单信息完整：\n\n📋 类型：${updatedOrder.type === 'delivery_pickup' ? '代拿快递' : updatedOrder.type === 'delivery_food' ? '代取外卖' : '其他'}\n💰 报酬：¥${updatedOrder.price}\n📍 取货：${updatedOrder.pickup_location?.address}\n📍 送达：${updatedOrder.delivery_location?.address}\n\n请回复"确认"发布订单，或"修改"调整信息，或"取消"放弃发布。`
       }]);
     } else {
+      // 还有缺失信息
+      const currentInfo: string[] = [];
+      if (updatedOrder.type) {
+        currentInfo.push(`📋 类型：${updatedOrder.type === 'delivery_pickup' ? '代拿快递' : updatedOrder.type === 'delivery_food' ? '代取外卖' : '其他'}`);
+      }
+      if (updatedOrder.price) {
+        currentInfo.push(`💰 报酬：¥${updatedOrder.price}`);
+      }
+      if (updatedOrder.pickup_location?.address) {
+        currentInfo.push(`📍 取货：${updatedOrder.pickup_location.address}`);
+      }
+      if (updatedOrder.delivery_location?.address) {
+        currentInfo.push(`📍 送达：${updatedOrder.delivery_location.address}`);
+      }
+
+      const infoText = currentInfo.length > 0 
+        ? `当前已记录的信息：\n${currentInfo.join('\n')}\n\n` 
+        : '';
+      
       setAiConversations(prev => [...prev, {
         role: 'assistant',
-        content: `收到！还需要您提供：\n${missingInfo.map((info, i) => `${i + 1}. ${info}`).join('\n')}\n\n请继续补充，或回复"确认"直接发布。`
+        content: `${infoText}还需要您提供以下信息：\n${missingInfo.map((info, i) => `${i + 1}. ${info}`).join('\n')}\n\n请补充完整后才能发布订单。`
       }]);
     }
   };
@@ -635,12 +680,36 @@ const IndexPage = () => {
       return;
     }
 
+    // 再次检查所有必填信息是否完整
+    const missingInfo: string[] = [];
+    if (!aiOrderData.type) {
+      missingInfo.push('订单类型');
+    }
+    if (!aiOrderData.pickup_location?.address) {
+      missingInfo.push('取货地点');
+    }
+    if (!aiOrderData.delivery_location?.address) {
+      missingInfo.push('送达地点');
+    }
+    if (!aiOrderData.price) {
+      missingInfo.push('报酬金额');
+    }
+
+    if (missingInfo.length > 0) {
+      // 信息不完整，禁止发布
+      setAiConversations(prev => [...prev, {
+        role: 'assistant',
+        content: `订单信息不完整，还需要您提供：\n${missingInfo.map((info, i) => `${i + 1}. ${info}`).join('\n')}\n\n请补充完整后才能发布订单。`
+      }]);
+      return;
+    }
+
     try {
       // 转换字段名为后端期望的格式
       const orderPayload = {
         publisherId: aiOrderData.publisher_id || userInfo?.id,
         type: aiOrderData.type,
-        title: aiOrderData.title,
+        title: aiOrderData.title || (aiOrderData.type === 'delivery_pickup' ? '代拿快递' : aiOrderData.type === 'delivery_food' ? '代取外卖' : '校园互助订单'),
         description: aiOrderData.description,
         pickupLocation: aiOrderData.pickup_location,
         deliveryLocation: aiOrderData.delivery_location,
@@ -796,14 +865,22 @@ const IndexPage = () => {
           <View className="flex gap-2 mb-4 overflow-x-auto">
             {ORDER_TYPES.map((type) => {
               const Icon = type.icon;
+              const isSelected = selectedType === type.value;
+              // 代取外卖用橙色，其他用蓝色
+              const bgColor = isSelected 
+                ? (type.value === 'delivery_food' ? 'bg-orange-500' : 'bg-blue-500')
+                : 'bg-gray-200';
+              const textColor = isSelected ? 'text-white' : 'text-gray-700';
+              const iconColor = isSelected ? 'white' : '#374151';
+              
               return (
                 <Button
                   key={type.value}
                   size="sm"
-                  className={`flex-shrink-0 ${selectedType === type.value ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-700'}`}
+                  className={`flex-shrink-0 ${bgColor} ${textColor}`}
                   onClick={() => setSelectedType(type.value)}
                 >
-                  <Icon size={14} color={selectedType === type.value ? 'white' : '#374151'} />
+                  <Icon size={14} color={iconColor} />
                   <Text className="ml-1">{type.label}</Text>
                 </Button>
               );

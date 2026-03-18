@@ -1,6 +1,6 @@
 import { View, Text, Textarea } from '@tarojs/components';
 import Taro, { getEnv, ENV_TYPE, useDidShow } from '@tarojs/taro';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { Network } from '@/network';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -27,7 +27,6 @@ type Order = {
   };
   status: string;
   distance?: number;
-  is_mock?: boolean;
 };
 
 type UserInfo = {
@@ -46,46 +45,6 @@ const ORDER_TYPES = [
   { value: 'all', label: '全部', icon: ShoppingBag },
   { value: 'delivery_pickup', label: '代拿快递', icon: Package },
   { value: 'delivery_food', label: '代取外卖', icon: Utensils },
-];
-
-// 模拟订单数据
-const MOCK_ORDERS: Order[] = [
-  {
-    id: 'mock-1',
-    title: '代拿快递 - 京东包裹',
-    description: '帮忙从校门口取快递，送到3号宿舍楼',
-    type: 'delivery_pickup',
-    price: 5,
-    pickup_location: { latitude: 39.9042, longitude: 116.4074, address: '校门口快递点' },
-    delivery_location: { latitude: 39.9052, longitude: 116.4084, address: '3号宿舍楼' },
-    status: 'pending',
-    distance: 0.5,
-    is_mock: true,
-  },
-  {
-    id: 'mock-2',
-    title: '代取外卖 - 麦当劳',
-    description: '帮忙从麦当劳取外卖，送到图书馆',
-    type: 'delivery_food',
-    price: 6,
-    pickup_location: { latitude: 39.9062, longitude: 116.4094, address: '麦当劳' },
-    delivery_location: { latitude: 39.9072, longitude: 116.4104, address: '图书馆' },
-    status: 'pending',
-    distance: 0.8,
-    is_mock: true,
-  },
-  {
-    id: 'mock-3',
-    title: '代拿快递 - 顺丰包裹',
-    description: '帮忙从顺丰网点取快递，送到食堂',
-    type: 'delivery_pickup',
-    price: 4,
-    pickup_location: { latitude: 39.9082, longitude: 116.4114, address: '顺丰网点' },
-    delivery_location: { latitude: 39.9092, longitude: 116.4124, address: '学生食堂' },
-    status: 'pending',
-    distance: 1.2,
-    is_mock: true,
-  },
 ];
 
 const IndexPage = () => {
@@ -228,61 +187,24 @@ const IndexPage = () => {
   const loadOrders = async () => {
     setLoading(true);
     try {
-      // 从后端加载真实订单
+      // 从后端加载所有订单
       const res = await Network.request({ url: '/api/orders' });
-      let realOrders: Order[] = [];
       
       if (res.data && res.data.code === 200) {
-        realOrders = (res.data.data || []).map((order: any) => ({
+        const allOrders = (res.data.data || []).map((order: any) => ({
           ...order,
-          is_mock: false,
         }));
+        setOrders(allOrders);
+      } else {
+        setOrders([]);
       }
-
-      // 保留3个模拟订单（如果真实订单少于3个）
-      const mockOrdersNeeded = Math.max(0, 3 - realOrders.filter(o => o.status === 'pending').length);
-      const mockOrders = MOCK_ORDERS.slice(0, mockOrdersNeeded);
-      
-      // 合并订单：真实订单 + 模拟订单
-      setOrders([...realOrders, ...mockOrders]);
     } catch (error) {
       console.error('加载订单失败:', error);
-      // 如果加载失败，使用模拟订单
-      setOrders(MOCK_ORDERS);
+      setOrders([]);
     } finally {
       setLoading(false);
     }
   };
-
-  // 生成新的模拟订单
-  const generateNewMockOrder = useCallback(() => {
-    const types = ['delivery_pickup', 'delivery_food'];
-    const titles = [
-      ['代拿快递 - 菜鸟驿站', '代拿快递 - 邮政局', '代拿快递 - 天猫超市'],
-      ['代取外卖 - 肯德基', '代取外卖 - 瑞幸咖啡', '代取外卖 - 喜茶'],
-    ];
-    const locations = ['校门口', '食堂', '图书馆', '宿舍楼', '教学楼'];
-    
-    const typeIndex = Math.random() > 0.5 ? 0 : 1;
-    const type = types[typeIndex];
-    const titleList = titles[typeIndex];
-    const title = titleList[Math.floor(Math.random() * titleList.length)];
-    const pickup = locations[Math.floor(Math.random() * locations.length)];
-    const delivery = locations[Math.floor(Math.random() * locations.length)];
-    
-    return {
-      id: 'mock-' + Date.now(),
-      title,
-      description: `帮忙从${pickup}取件，送到${delivery}`,
-      type,
-      price: Math.floor(Math.random() * 6) + 3, // 3-8元
-      pickup_location: { latitude: 39.9042, longitude: 116.4074, address: pickup },
-      delivery_location: { latitude: 39.9052, longitude: 116.4084, address: delivery },
-      status: 'pending',
-      distance: Math.random() * 2 + 0.1,
-      is_mock: true,
-    };
-  }, []);
 
   const handlePublishOrder = async () => {
     if (!userInfo) {
@@ -332,84 +254,27 @@ const IndexPage = () => {
     }
   };
 
-  const acceptOrder = async (orderId: string, isMock: boolean) => {
+  const acceptOrder = async (orderId: string) => {
     if (!userInfo) {
       Taro.showToast({ title: '请先登录', icon: 'none' });
       return;
     }
 
     try {
-      if (isMock) {
-        // 模拟订单：先创建真实订单，再接单
-        const mockOrder = orders.find(o => o.id === orderId);
-        if (!mockOrder) {
-          Taro.showToast({ title: '订单不存在', icon: 'none' });
-          return;
-        }
+      // 直接调用后端接单接口
+      const res = await Network.request({
+        url: `/api/orders/${orderId}/accept`,
+        method: 'POST',
+        data: { accepterId: userInfo.id },
+      });
 
-        // 使用当前用户作为发布者（模拟订单由系统生成，但发布者设置为当前用户）
-        // 这样订单会出现在"我发布的"列表中，但状态是"已接单"
-        // 或者使用系统用户ID: 919dbf8f-039b-41f2-b086-1cbf1884a1c5
-        
-        // 1. 创建真实订单（使用系统用户作为发布者）
-        const createRes = await Network.request({
-          url: '/api/orders',
-          method: 'POST',
-          data: {
-            publisherId: '919dbf8f-039b-41f2-b086-1cbf1884a1c5', // 系统模拟用户ID
-            type: mockOrder.type,
-            title: mockOrder.title,
-            description: mockOrder.description,
-            pickupLocation: mockOrder.pickup_location,
-            deliveryLocation: mockOrder.delivery_location,
-            price: mockOrder.price,
-            images: [],
-          },
-        });
+      console.log('接单响应:', res.data);
 
-        console.log('创建订单响应:', createRes.data);
-
-        if (createRes.data?.code === 200) {
-          const realOrderId = createRes.data.data.id;
-          console.log('创建的订单ID:', realOrderId);
-          
-          // 2. 接单
-          const acceptRes = await Network.request({
-            url: `/api/orders/${realOrderId}/accept`,
-            method: 'POST',
-            data: { accepterId: userInfo.id },
-          });
-
-          console.log('接单响应:', acceptRes.data);
-
-          if (acceptRes.data?.code === 200) {
-            // 3. 从列表移除模拟订单，生成新订单
-            setOrders(prev => {
-              const newOrders = prev.filter(o => o.id !== orderId);
-              const newMockOrder = generateNewMockOrder();
-              return [...newOrders, newMockOrder];
-            });
-            Taro.showToast({ title: '接单成功', icon: 'success' });
-          } else {
-            Taro.showToast({ title: acceptRes.data?.msg || '接单失败', icon: 'none' });
-          }
-        } else {
-          Taro.showToast({ title: createRes.data?.msg || '创建订单失败', icon: 'none' });
-        }
+      if (res.data && res.data.code === 200) {
+        Taro.showToast({ title: '接单成功', icon: 'success' });
+        loadOrders();
       } else {
-        // 真实订单：调用后端接口
-        const res = await Network.request({
-          url: `/api/orders/${orderId}/accept`,
-          method: 'POST',
-          data: { accepterId: userInfo.id },
-        });
-
-        if (res.data && res.data.code === 200) {
-          Taro.showToast({ title: '接单成功', icon: 'success' });
-          loadOrders();
-        } else {
-          Taro.showToast({ title: '接单失败', icon: 'none' });
-        }
+        Taro.showToast({ title: res.data?.msg || '接单失败', icon: 'none' });
       }
     } catch (error) {
       console.error('接单失败:', error);
@@ -939,7 +804,7 @@ const IndexPage = () => {
                   <Button
                     size="sm"
                     className="w-full bg-blue-500 text-white"
-                    onClick={() => acceptOrder(order.id, order.is_mock || false)}
+                    onClick={() => acceptOrder(order.id)}
                   >
                     接单
                   </Button>

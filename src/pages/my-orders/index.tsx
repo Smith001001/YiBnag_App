@@ -1,6 +1,6 @@
 import { View, Text } from '@tarojs/components';
-import Taro from '@tarojs/taro';
-import { useState, useEffect } from 'react';
+import Taro, { useDidShow } from '@tarojs/taro';
+import { useState } from 'react';
 import { Network } from '@/network';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -53,24 +53,20 @@ const MyOrdersPage = () => {
   const [acceptedOrders, setAcceptedOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  // 每次显示页面时重新加载数据
+  useDidShow(() => {
     loadUserInfo();
-  }, []);
-
-  useEffect(() => {
-    if (userInfo) {
-      loadOrders();
-    }
-  }, [userInfo]);
+  });
 
   const loadUserInfo = async () => {
     try {
-      // 从本地存储获取用户信息
       const storedUser = Taro.getStorageSync('userInfo');
       if (storedUser) {
-        setUserInfo(JSON.parse(storedUser));
+        const user = JSON.parse(storedUser);
+        setUserInfo(user);
+        await loadOrders(user);
       } else {
-        // 创建新用户
+        // 如果没有用户信息，创建新用户
         const openid = 'user-' + Date.now();
         const res = await Network.request({
           url: '/api/users/get-or-create',
@@ -81,30 +77,34 @@ const MyOrdersPage = () => {
           const user = res.data.data;
           setUserInfo(user);
           Taro.setStorageSync('userInfo', JSON.stringify(user));
+          await loadOrders(user);
         }
       }
     } catch (error) {
       console.error('加载用户信息失败:', error);
+      Taro.showToast({ title: '加载失败', icon: 'none' });
     }
   };
 
-  const loadOrders = async () => {
-    if (!userInfo) return;
+  const loadOrders = async (user: UserInfo) => {
+    if (!user) return;
 
     setLoading(true);
     try {
-      // 加载我发布的订单
-      const publishedRes = await Network.request({
-        url: `/api/orders?publisherId=${userInfo.id}&limit=50`,
-      });
+      // 并行加载我发布的和我接的订单
+      const [publishedRes, acceptedRes] = await Promise.all([
+        Network.request({
+          url: `/api/orders?publisherId=${user.id}&limit=50`,
+        }),
+        Network.request({
+          url: `/api/orders?accepterId=${user.id}&limit=50`,
+        }),
+      ]);
+
       if (publishedRes.data?.code === 200) {
         setPublishedOrders(publishedRes.data.data || []);
       }
 
-      // 加载我接的订单
-      const acceptedRes = await Network.request({
-        url: `/api/orders?accepterId=${userInfo.id}&limit=50`,
-      });
       if (acceptedRes.data?.code === 200) {
         setAcceptedOrders(acceptedRes.data.data || []);
       }
@@ -125,13 +125,27 @@ const MyOrdersPage = () => {
 
       if (res.data?.code === 200) {
         Taro.showToast({ title: '操作成功', icon: 'success' });
-        loadOrders();
+        // 重新加载订单
+        if (userInfo) {
+          await loadOrders(userInfo);
+        }
       } else {
         Taro.showToast({ title: '操作失败', icon: 'none' });
       }
     } catch (error) {
       console.error('更新订单状态失败:', error);
       Taro.showToast({ title: '操作失败', icon: 'none' });
+    }
+  };
+
+  const cancelOrder = async (orderId: string) => {
+    const { confirm } = await Taro.showModal({
+      title: '确认取消',
+      content: '确定要取消这个订单吗？',
+    });
+    
+    if (confirm) {
+      await updateOrderStatus(orderId, 'cancelled');
     }
   };
 
@@ -143,6 +157,16 @@ const MyOrdersPage = () => {
         return <Utensils size={16} color="#F59E0B" />;
       default:
         return <ShoppingBag size={16} color="#6B7280" />;
+    }
+  };
+
+  const getStatusColor = (color: string) => {
+    switch (color) {
+      case 'text-orange-500': return '#F97316';
+      case 'text-blue-500': return '#3B82F6';
+      case 'text-purple-500': return '#A855F7';
+      case 'text-green-500': return '#22C55E';
+      default: return '#9CA3AF';
     }
   };
 
@@ -172,7 +196,7 @@ const MyOrdersPage = () => {
 
           <View className="flex justify-between items-center mb-3">
             <View className="flex items-center gap-1">
-              <StatusIcon size={14} color={statusInfo.color.includes('orange') ? '#F97316' : statusInfo.color.includes('blue') ? '#3B82F6' : statusInfo.color.includes('green') ? '#22C55E' : '#9CA3AF'} />
+              <StatusIcon size={14} color={getStatusColor(statusInfo.color)} />
               <Text className={`text-xs ${statusInfo.color}`}>{statusInfo.label}</Text>
             </View>
             <Text className="text-xs text-gray-400">
@@ -181,44 +205,73 @@ const MyOrdersPage = () => {
           </View>
 
           {/* 操作按钮 */}
-          {order.status === 'pending' && isPublished && (
-            <Button
-              size="sm"
-              className="w-full bg-gray-400 text-white"
-              onClick={() => updateOrderStatus(order.id, 'cancelled')}
-            >
-              取消订单
-            </Button>
+          {order.status === 'pending' && (
+            <View className="flex gap-2">
+              <Button
+                size="sm"
+                className="flex-1 bg-gray-400 text-white"
+                onClick={() => cancelOrder(order.id)}
+              >
+                取消订单
+              </Button>
+            </View>
           )}
 
           {order.status === 'accepted' && isPublished && (
-            <Button
-              size="sm"
-              className="w-full bg-green-500 text-white"
-              onClick={() => updateOrderStatus(order.id, 'completed')}
-            >
-              确认完成
-            </Button>
+            <View className="flex gap-2">
+              <Button
+                size="sm"
+                className="flex-1 bg-gray-400 text-white"
+                onClick={() => cancelOrder(order.id)}
+              >
+                取消订单
+              </Button>
+              <Button
+                size="sm"
+                className="flex-1 bg-green-500 text-white"
+                onClick={() => updateOrderStatus(order.id, 'completed')}
+              >
+                确认完成
+              </Button>
+            </View>
           )}
 
           {order.status === 'accepted' && !isPublished && (
-            <Button
-              size="sm"
-              className="w-full bg-blue-500 text-white"
-              onClick={() => updateOrderStatus(order.id, 'in_progress')}
-            >
-              开始配送
-            </Button>
+            <View className="flex gap-2">
+              <Button
+                size="sm"
+                className="flex-1 bg-gray-400 text-white"
+                onClick={() => cancelOrder(order.id)}
+              >
+                取消接单
+              </Button>
+              <Button
+                size="sm"
+                className="flex-1 bg-blue-500 text-white"
+                onClick={() => updateOrderStatus(order.id, 'in_progress')}
+              >
+                开始配送
+              </Button>
+            </View>
           )}
 
           {order.status === 'in_progress' && !isPublished && (
-            <Button
-              size="sm"
-              className="w-full bg-green-500 text-white"
-              onClick={() => updateOrderStatus(order.id, 'completed')}
-            >
-              完成配送
-            </Button>
+            <View className="flex gap-2">
+              <Button
+                size="sm"
+                className="flex-1 bg-gray-400 text-white"
+                onClick={() => cancelOrder(order.id)}
+              >
+                取消订单
+              </Button>
+              <Button
+                size="sm"
+                className="flex-1 bg-green-500 text-white"
+                onClick={() => updateOrderStatus(order.id, 'completed')}
+              >
+                完成配送
+              </Button>
+            </View>
           )}
         </CardContent>
       </Card>

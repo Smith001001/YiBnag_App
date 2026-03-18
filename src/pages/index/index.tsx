@@ -766,12 +766,31 @@ const IndexPage = () => {
       if (res.data?.code === 200) {
         const recommendations = res.data.data;
         if (recommendations && recommendations.length > 0) {
-          let responseText = '为您找到以下合适的订单：\n\n';
-          recommendations.forEach((rec: any, index: number) => {
-            responseText += `${index + 1}. ${rec.matchReason}\n   匹配度：${rec.matchScore}%\n\n`;
-          });
-          responseText += '您可以在"订单大厅"中查看并接单。';
-          setAiConversations(prev => [...prev, { role: 'assistant', content: responseText }]);
+          // 获取推荐的订单ID列表
+          const recommendedOrderIds = recommendations.map((rec: any) => rec.orderId);
+          
+          // 从当前订单列表中找到对应的真实订单
+          const realOrders = orders.filter(o => recommendedOrderIds.includes(o.id));
+          
+          if (realOrders.length > 0) {
+            let responseText = '为您找到以下合适的订单：\n\n';
+            realOrders.forEach((order, index) => {
+              const rec = recommendations.find((r: any) => r.orderId === order.id);
+              responseText += `${index + 1}. ${order.title}\n`;
+              responseText += `   📍 ${order.pickup_location?.address} → ${order.delivery_location?.address}\n`;
+              responseText += `   💰 报酬：¥${order.price}\n`;
+              responseText += `   📊 匹配度：${rec?.matchScore || 70}%\n`;
+              responseText += `   💡 ${rec?.matchReason || '符合您的需求'}\n\n`;
+            });
+            responseText += '您可以在"订单大厅"中查看并接单。';
+            setAiConversations(prev => [...prev, { role: 'assistant', content: responseText }]);
+          } else {
+            // 如果找不到对应的真实订单，提示用户
+            setAiConversations(prev => [...prev, { 
+              role: 'assistant', 
+              content: '暂时没有找到完全匹配的订单，您可以去"订单大厅"查看所有可用订单。' 
+            }]);
+          }
         } else {
           setAiConversations(prev => [...prev, { 
             role: 'assistant', 
@@ -830,13 +849,13 @@ const IndexPage = () => {
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="p-4">
         <TabsList className="grid w-full grid-cols-3 mb-4">
-          <TabsTrigger value="orders" className="data-[state=active]:bg-blue-500 data-[state=active]:text-white">
+          <TabsTrigger value="orders">
             订单大厅
           </TabsTrigger>
-          <TabsTrigger value="publish" className="data-[state=active]:bg-blue-500 data-[state=active]:text-white">
+          <TabsTrigger value="publish">
             发布订单
           </TabsTrigger>
-          <TabsTrigger value="ai" className="data-[state=active]:bg-blue-500 data-[state=active]:text-white">
+          <TabsTrigger value="ai">
             AI 助手
           </TabsTrigger>
         </TabsList>

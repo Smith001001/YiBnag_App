@@ -44,7 +44,7 @@ const TabsList = React.forwardRef<
   <View
     ref={ref}
     className={cn(
-      "inline-flex h-10 items-center justify-center rounded-md bg-muted p-1 text-muted-foreground",
+      "flex flex-row h-12 items-center justify-center rounded-xl bg-gray-100 p-1",
       className
     )}
     {...props}
@@ -73,15 +73,17 @@ const TabsTrigger = React.forwardRef<
       ref={ref}
       onClick={handleClick}
       className={cn(
-        "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1 text-sm font-medium ring-offset-background transition-all focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background disabled:pointer-events-none disabled:opacity-50",
-        isActive && "bg-background text-foreground shadow-sm",
-        disabled && "opacity-50 pointer-events-none",
+        "flex-1 flex items-center justify-center whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-all",
+        isActive 
+          ? "bg-white text-blue-500 shadow-sm" 
+          : "text-gray-500",
+        disabled && "opacity-50",
         className
         )}
       hoverClass={
         disabled
           ? undefined
-          : "border-ring ring-2 ring-ring ring-offset-2 ring-offset-background"
+          : "bg-white shadow-sm"
       }
       {...props}
     />

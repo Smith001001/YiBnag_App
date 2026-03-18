@@ -31,26 +31,43 @@ export class AiService {
       return [];
     }
 
-    // 构建订单列表文本
+    // 构建订单列表文本 - 只包含真实存在的订单
     const ordersText = orders.map((order, index) => {
       return `${index + 1}. 订单ID: ${order.id}
          类型: ${this.translateOrderType(order.type)}
          标题: ${order.title}
          描述: ${order.description}
-         取货地点: ${order.pickup_location?.address}
-         送达地点: ${order.delivery_location?.address}
+         取货地点: ${order.pickup_location?.address || '未指定'}
+         送达地点: ${order.delivery_location?.address || '未指定'}
          价格: ¥${order.price}
          截止时间: ${order.deadline || '无'}`;
     }).join('\n\n');
 
+    // 可用的订单ID列表，用于验证AI返回的结果
+    const validOrderIds = orders.map(o => o.id);
+
     // 构建系统提示词
-    const systemPrompt = `你是一个校园互助平台的智能推荐助手。根据用户的需求描述，从可用的订单列表中推荐最合适的订单。
+    const systemPrompt = `你是一个校园互助平台的智能推荐助手。根据用户的需求描述，从给定的订单列表中推荐最合适的订单。
+
+【极其重要的规则 - 必须严格遵守】：
+
+1. **只能从给定的订单列表中选择**：
+   - 你只能推荐列表中存在的订单
+   - 绝对禁止编造、猜测或创建任何不存在的订单ID
+   - 如果列表中没有合适的订单，返回空数组
+
+2. **订单ID必须精确匹配**：
+   - 订单ID必须从给定的列表中精确复制，不能修改任何字符
+   - 不要创建新的订单ID格式
+
+3. **推荐理由必须基于真实信息**：
+   - 推荐理由只能基于订单列表中显示的真实信息
+   - 不要编造订单的任何属性（如价格、地点等）
 
 推荐标准：
 1. 匹配用户的需求类型（代拿快递、代取外卖、跑腿等）
-2. 考虑地理位置（如果用户提供了位置信息）
+2. 考虑地理位置便利性
 3. 考虑价格合理性
-4. 考虑截止时间紧迫性
 
 订单类型翻译：
 - delivery_pickup: 代拿快递
@@ -58,16 +75,18 @@ export class AiService {
 - errand: 跑腿代办
 - other: 其他
 
-请以 JSON 格式返回推荐结果，包含以下字段：
-- orderIds: 推荐的订单ID数组（最多5个）
-- recommendations: 推荐理由，每个订单的推荐理由
-- scores: 匹配分数（0-100）
-
-示例返回格式：
+请以 JSON 格式返回推荐结果：
 {
-  "orderIds": ["订单ID1", "订单ID2"],
-  "recommendations": ["推荐理由1", "推荐理由2"],
-  "scores": [90, 85]
+  "orderIds": ["从列表中精确复制的订单ID"],
+  "reasons": ["基于真实订单信息的推荐理由"],
+  "scores": [匹配分数0-100]
+}
+
+如果找不到合适的订单，返回：
+{
+  "orderIds": [],
+  "reasons": [],
+  "scores": []
 }`;
 
     // 构建用户消息
@@ -85,31 +104,43 @@ ${ordersText}
         { role: 'user', content: userMessage },
       ], {
         model: 'doubao-seed-1-8-251228',
-        temperature: 0.7,
+        temperature: 0.3, // 降低温度以获得更确定的输出
       });
 
       // 解析 LLM 返回的 JSON
       const result = this.parseAIResponse(response.content);
 
-      // 构建推荐结果
+      // 构建推荐结果 - 验证订单ID是否真实存在
       const recommendations: OrderRecommendation[] = [];
+      
+      // 创建订单ID到订单信息的映射
+      const orderMap = new Map(orders.map(o => [o.id, o]));
+      
       if (result.orderIds && Array.isArray(result.orderIds)) {
         for (let i = 0; i < result.orderIds.length; i++) {
-          recommendations.push({
-            orderId: result.orderIds[i],
-            matchReason: result.recommendations?.[i] || '匹配度较高',
-            matchScore: result.scores?.[i] || 80,
-          });
+          const orderId = result.orderIds[i];
+          
+          // 验证订单ID是否真实存在
+          if (validOrderIds.includes(orderId)) {
+            const order = orderMap.get(orderId);
+            recommendations.push({
+              orderId: orderId,
+              matchReason: result.reasons?.[i] || `${order?.title}，报酬¥${order?.price}`,
+              matchScore: Math.min(100, Math.max(0, result.scores?.[i] || 70)),
+            });
+          } else {
+            console.warn(`AI返回了无效的订单ID: ${orderId}，已忽略`);
+          }
         }
       }
 
       return recommendations;
     } catch (error) {
       console.error('AI 推荐失败:', error);
-      // 如果 AI 失败，返回所有订单作为默认推荐
-      return orders.map(order => ({
+      // 如果 AI 失败，返回前3个订单作为默认推荐
+      return orders.slice(0, 3).map(order => ({
         orderId: order.id,
-        matchReason: '系统默认推荐',
+        matchReason: `${order.title}，${order.pickup_location?.address || '待定'} → ${order.delivery_location?.address || '待定'}，报酬¥${order.price}`,
         matchScore: 60,
       }));
     }

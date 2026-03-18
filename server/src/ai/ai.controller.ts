@@ -60,4 +60,26 @@ export class AiController {
       };
     }
   }
+
+  @Post('understand-intent')
+  async understandIntent(
+    @Body('message') message: string,
+    @Body('context') context: Array<{ role: string; content: string }> = []
+  ) {
+    try {
+      const result = await this.aiService.understandIntent(message, context);
+
+      return {
+        code: 200,
+        msg: '意图识别成功',
+        data: result,
+      };
+    } catch (error) {
+      return {
+        code: 500,
+        msg: error instanceof Error ? error.message : '意图识别失败',
+        data: null,
+      };
+    }
+  }
 }

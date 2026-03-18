@@ -3,6 +3,7 @@ export default defineAppConfig({
     'pages/index/index',
     'pages/my-orders/index',
     'pages/profile/index',
+    'pages/history/index',
   ],
   window: {
     backgroundTextStyle: 'light',

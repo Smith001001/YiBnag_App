@@ -91,22 +91,29 @@ const MyOrdersPage = () => {
 
     setLoading(true);
     try {
-      // 并行加载我发布的和我接的订单
-      const [publishedRes, acceptedRes] = await Promise.all([
-        Network.request({
-          url: `/api/orders?publisherId=${user.id}&limit=50`,
-        }),
-        Network.request({
-          url: `/api/orders?accepterId=${user.id}&limit=50`,
-        }),
-      ]);
+      // 加载我发布的订单
+      const publishedRes = await Network.request({
+        url: `/api/orders?publisherId=${user.id}&limit=50`,
+      });
+
+      // 加载我接的订单
+      const acceptedRes = await Network.request({
+        url: `/api/orders?accepterId=${user.id}&limit=50`,
+      });
+
+      // 只显示进行中的订单（pending, accepted, in_progress）
+      const activeStatuses = ['pending', 'accepted', 'in_progress'];
 
       if (publishedRes.data?.code === 200) {
-        setPublishedOrders(publishedRes.data.data || []);
+        const allPublished = publishedRes.data.data || [];
+        const activePublished = allPublished.filter((order: Order) => activeStatuses.includes(order.status));
+        setPublishedOrders(activePublished);
       }
 
       if (acceptedRes.data?.code === 200) {
-        setAcceptedOrders(acceptedRes.data.data || []);
+        const allAccepted = acceptedRes.data.data || [];
+        const activeAccepted = allAccepted.filter((order: Order) => activeStatuses.includes(order.status));
+        setAcceptedOrders(activeAccepted);
       }
     } catch (error) {
       console.error('加载订单失败:', error);

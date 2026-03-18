@@ -333,13 +333,53 @@ const IndexPage = () => {
 
     try {
       if (isMock) {
-        // 模拟接单：直接从列表移除，并生成新订单
-        setOrders(prev => {
-          const newOrders = prev.filter(o => o.id !== orderId);
-          const newMockOrder = generateNewMockOrder();
-          return [...newOrders, newMockOrder];
+        // 模拟订单：先创建真实订单，再接单
+        const mockOrder = orders.find(o => o.id === orderId);
+        if (!mockOrder) {
+          Taro.showToast({ title: '订单不存在', icon: 'none' });
+          return;
+        }
+
+        // 1. 创建真实订单
+        const createRes = await Network.request({
+          url: '/api/orders',
+          method: 'POST',
+          data: {
+            publisherId: 'system-mock',
+            type: mockOrder.type,
+            title: mockOrder.title,
+            description: mockOrder.description,
+            pickupLocation: mockOrder.pickup_location,
+            deliveryLocation: mockOrder.delivery_location,
+            price: mockOrder.price,
+            images: [],
+          },
         });
-        Taro.showToast({ title: '接单成功', icon: 'success' });
+
+        if (createRes.data?.code === 200) {
+          const realOrderId = createRes.data.data.id;
+          
+          // 2. 接单
+          const acceptRes = await Network.request({
+            url: `/api/orders/${realOrderId}/accept`,
+            method: 'POST',
+            data: { accepterId: userInfo.id },
+          });
+
+          if (acceptRes.data?.code === 200) {
+            // 3. 从列表移除模拟订单，生成新订单
+            setOrders(prev => {
+              const newOrders = prev.filter(o => o.id !== orderId);
+              const newMockOrder = generateNewMockOrder();
+              return [...newOrders, newMockOrder];
+            });
+            Taro.showToast({ title: '接单成功', icon: 'success' });
+          } else {
+            Taro.showToast({ title: '接单失败', icon: 'none' });
+          }
+        } else {
+          Taro.showToast({ title: '接单失败', icon: 'none' });
+        }
       } else {
         // 真实订单：调用后端接口
         const res = await Network.request({
@@ -361,7 +401,7 @@ const IndexPage = () => {
     }
   };
 
-  // AI助手处理
+  // AI助手处理 - 使用AI理解用户意图
   const handleAiSend = async () => {
     if (!aiInput.trim()) {
       return;
@@ -373,89 +413,165 @@ const IndexPage = () => {
     setAiLoading(true);
 
     try {
-      // 判断用户意图
-      const isPublishIntent = userMessage.includes('发布') || userMessage.includes('发布订单') || userMessage.includes('帮我下单');
-      const isRecommendIntent = userMessage.includes('推荐') || userMessage.includes('找订单') || userMessage.includes('有什么订单');
+      // 调用AI意图识别接口
+      const intentRes = await Network.request({
+        url: '/api/ai/understand-intent',
+        method: 'POST',
+        data: {
+          message: userMessage,
+          context: aiConversations.slice(-6), // 最近6轮对话
+        },
+      });
 
-      if (isPublishIntent) {
-        // 发布订单意图
-        await handleAiPublishFlow(userMessage);
-      } else if (isRecommendIntent) {
-        // 推荐订单意图
-        await handleAiRecommendFlow(userMessage);
+      if (intentRes.data?.code === 200) {
+        const { intent, extractedInfo, response } = intentRes.data.data;
+
+        switch (intent) {
+          case 'publish_order':
+            // 发布订单意图
+            await handleAiPublishFlow(userMessage, extractedInfo, response);
+            break;
+          case 'recommend_order':
+            // 推荐订单意图
+            setAiConversations(prev => [...prev, { role: 'assistant', content: response }]);
+            await handleAiRecommendFlow(userMessage);
+            break;
+          case 'confirm':
+            // 确认发布
+            if (aiOrderData) {
+              await confirmPublishOrder();
+            } else {
+              setAiConversations(prev => [...prev, { role: 'assistant', content: response }]);
+            }
+            break;
+          case 'provide_info':
+            // 补充信息
+            if (aiOrderData) {
+              await handleProvideInfo(userMessage, extractedInfo);
+            } else {
+              setAiConversations(prev => [...prev, { role: 'assistant', content: response }]);
+            }
+            break;
+          default:
+            // 普通对话
+            setAiConversations(prev => [...prev, { role: 'assistant', content: response }]);
+        }
       } else {
-        // 普通对话
-        await handleAiChat(userMessage);
+        // 意图识别失败，使用备用逻辑
+        await handleAiFallback(userMessage);
       }
     } catch (error) {
       console.error('AI处理失败:', error);
-      setAiConversations(prev => [...prev, { 
-        role: 'assistant', 
-        content: '抱歉，我遇到了一些问题，请稍后再试。' 
-      }]);
+      await handleAiFallback(userMessage);
     } finally {
       setAiLoading(false);
     }
   };
 
-  const handleAiPublishFlow = async (userMessage: string) => {
-    // 解析订单信息
-    const res = await Network.request({
-      url: '/api/ai/parse-order',
-      method: 'POST',
-      data: {
-        text: userMessage,
-        publisherId: userInfo?.id,
-        pickupLocation: userLocation || { latitude: 0, longitude: 0, address: '当前位置' },
-        deliveryLocation: { latitude: 0, longitude: 0, address: '目标地点' },
-      },
-    });
+  // 处理发布订单意图
+  const handleAiPublishFlow = async (userMessage: string, extractedInfo: any, aiResponse: string) => {
+    try {
+      // 如果有提取到的信息，直接使用
+      if (extractedInfo && (extractedInfo.type || extractedInfo.title || extractedInfo.description)) {
+        const pickupLocation = extractedInfo.pickupAddress 
+          ? { latitude: 0, longitude: 0, address: extractedInfo.pickupAddress }
+          : (userLocation ? { ...userLocation, address: '当前位置' } : { latitude: 0, longitude: 0, address: '待确认' });
+        const deliveryLocation = extractedInfo.deliveryAddress
+          ? { latitude: 0, longitude: 0, address: extractedInfo.deliveryAddress }
+          : { latitude: 0, longitude: 0, address: '待确认' };
 
-    if (res.data?.code === 200) {
-      const orderData = res.data.data;
-      setAiOrderData(orderData);
+        const orderData = {
+          publisher_id: userInfo?.id,
+          type: extractedInfo.type || 'other',
+          title: extractedInfo.title || '校园互助订单',
+          description: extractedInfo.description || userMessage,
+          pickup_location: pickupLocation,
+          delivery_location: deliveryLocation,
+          price: extractedInfo.price || 5,
+          images: [],
+        };
 
-      // 检查是否有缺失信息
-      const missingInfo: string[] = [];
-      if (!orderData.title || orderData.title === '未命名订单') {
-        missingInfo.push('订单标题');
-      }
-      if (!orderData.pickup_location?.address) {
-        missingInfo.push('取货地点');
-      }
-      if (!orderData.delivery_location?.address) {
-        missingInfo.push('送达地点');
-      }
+        // 检查信息是否完整
+        const missingInfo: string[] = [];
+        if (!extractedInfo.pickupAddress && orderData.pickup_location.address === '待确认') {
+          missingInfo.push('取货地点');
+        }
+        if (!extractedInfo.deliveryAddress && orderData.delivery_location.address === '待确认') {
+          missingInfo.push('送达地点');
+        }
 
-      if (missingInfo.length > 0) {
-        // 引导用户补充信息
-        setAiConversations(prev => [...prev, {
-          role: 'assistant',
-          content: `我已经理解了您的需求：\n\n📋 订单类型：${orderData.type === 'delivery_pickup' ? '代拿快递' : '代取外卖'}\n💰 价格：¥${orderData.price}\n📝 描述：${orderData.description}\n\n还需要您提供以下信息：\n${missingInfo.map((info, i) => `${i + 1}. ${info}`).join('\n')}\n\n请告诉我这些信息，或者直接输入"确认发布"来创建订单。`
-        }]);
-      } else {
-        // 信息完整，直接发布
-        const createRes = await Network.request({
-          url: '/api/orders',
-          method: 'POST',
-          data: orderData,
-        });
-
-        if (createRes.data?.code === 200) {
+        if (missingInfo.length > 0) {
+          // 保存当前订单数据，等待用户补充
+          setAiOrderData(orderData);
           setAiConversations(prev => [...prev, {
             role: 'assistant',
-            content: `✅ 订单发布成功！\n\n📋 ${orderData.title}\n💰 报酬：¥${orderData.price}\n📍 取货：${orderData.pickup_location?.address}\n📍 送达：${orderData.delivery_location?.address}\n\n您可以在"我的订单"中查看详情。`
+            content: `${aiResponse}\n\n我已经理解了您的需求，还需要您提供以下信息：\n${missingInfo.map((info, i) => `${i + 1}. ${info}`).join('\n')}\n\n请告诉我这些信息，或直接说"确认发布"。`
           }]);
-          setAiOrderData(null);
-          loadOrders();
+        } else {
+          // 信息完整，直接发布
+          const createRes = await Network.request({
+            url: '/api/orders',
+            method: 'POST',
+            data: orderData,
+          });
+
+          if (createRes.data?.code === 200) {
+            setAiConversations(prev => [...prev, {
+              role: 'assistant',
+              content: `✅ 订单发布成功！\n\n📋 ${orderData.title}\n💰 报酬：¥${orderData.price}\n📍 取货：${orderData.pickup_location.address}\n📍 送达：${orderData.delivery_location.address}\n\n您可以在"我的订单"中查看详情。`
+            }]);
+            loadOrders();
+          } else {
+            setAiConversations(prev => [...prev, {
+              role: 'assistant',
+              content: `我理解您想发布订单，但创建失败了。请告诉我：\n1. 取货地点在哪里？\n2. 送到哪里？\n3. 愿意付多少报酬？`
+            }]);
+          }
+        }
+      } else {
+        // 没有提取到足够信息，调用解析接口
+        const res = await Network.request({
+          url: '/api/ai/parse-order',
+          method: 'POST',
+          data: {
+            text: userMessage,
+            publisherId: userInfo?.id,
+            pickupLocation: userLocation || { latitude: 0, longitude: 0, address: '待确认' },
+            deliveryLocation: { latitude: 0, longitude: 0, address: '待确认' },
+          },
+        });
+
+        if (res.data?.code === 200) {
+          const orderData = res.data.data;
+          setAiOrderData(orderData);
+
+          // 检查缺失信息
+          const missingInfo: string[] = [];
+          if (!orderData.pickup_location?.address || orderData.pickup_location.address === '待确认') {
+            missingInfo.push('取货地点');
+          }
+          if (!orderData.delivery_location?.address || orderData.delivery_location.address === '待确认') {
+            missingInfo.push('送达地点');
+          }
+
+          if (missingInfo.length > 0) {
+            setAiConversations(prev => [...prev, {
+              role: 'assistant',
+              content: `${aiResponse}\n\n我已经理解了您的需求：\n\n📋 订单类型：${orderData.type === 'delivery_pickup' ? '代拿快递' : orderData.type === 'delivery_food' ? '代取外卖' : '其他'}\n💰 价格：¥${orderData.price}\n📝 描述：${orderData.description}\n\n还需要您提供以下信息：\n${missingInfo.map((info, i) => `${i + 1}. ${info}`).join('\n')}\n\n请告诉我这些信息，或直接说"确认发布"。`
+            }]);
+          } else {
+            // 信息完整，直接发布
+            await confirmPublishOrder();
+          }
         } else {
           setAiConversations(prev => [...prev, {
             role: 'assistant',
-            content: '订单创建失败，请重试。'
+            content: aiResponse
           }]);
         }
       }
-    } else {
+    } catch (error) {
+      console.error('发布订单处理失败:', error);
       setAiConversations(prev => [...prev, {
         role: 'assistant',
         content: '我理解了您想发布订单，请告诉我更多详情，比如：取货地点、送达地点、报酬等。'
@@ -463,73 +579,160 @@ const IndexPage = () => {
     }
   };
 
-  const handleAiRecommendFlow = async (userMessage: string) => {
-    const res = await Network.request({
-      url: '/api/ai/recommend',
-      method: 'POST',
-      data: {
-        userDescription: userMessage,
-        userLatitude: userLocation?.latitude,
-        userLongitude: userLocation?.longitude,
-      },
-    });
+  // 处理补充信息
+  const handleProvideInfo = async (userMessage: string, extractedInfo: any) => {
+    if (!aiOrderData) {
+      setAiConversations(prev => [...prev, {
+        role: 'assistant',
+        content: '请先告诉我您想发布什么订单。'
+      }]);
+      return;
+    }
 
-    if (res.data?.code === 200) {
-      const recommendations = res.data.data;
-      if (recommendations && recommendations.length > 0) {
-        let responseText = '为您推荐以下订单：\n\n';
-        recommendations.forEach((rec: any, index: number) => {
-          responseText += `${index + 1}. ${rec.matchReason}\n   匹配度：${rec.matchScore}%\n\n`;
-        });
-        responseText += '您可以在"订单大厅"中查看并接单。';
-        setAiConversations(prev => [...prev, { role: 'assistant', content: responseText }]);
-      } else {
-        setAiConversations(prev => [...prev, { 
-          role: 'assistant', 
-          content: '暂时没有找到合适的订单，您可以稍后再试或去"订单大厅"查看所有订单。' 
-        }]);
+    // 更新订单数据
+    const updatedOrder = { ...aiOrderData };
+    
+    if (extractedInfo?.pickupAddress) {
+      updatedOrder.pickup_location = { ...updatedOrder.pickup_location, address: extractedInfo.pickupAddress };
+    }
+    if (extractedInfo?.deliveryAddress) {
+      updatedOrder.delivery_location = { ...updatedOrder.delivery_location, address: extractedInfo.deliveryAddress };
+    }
+    if (extractedInfo?.price) {
+      updatedOrder.price = extractedInfo.price;
+    }
+
+    // 尝试从消息中提取地址（简单匹配）
+    if (userMessage.includes('取货') || userMessage.includes('从')) {
+      const address = userMessage.replace(/取货地点[：:]?/, '').replace(/从/, '').replace(/取/, '').trim();
+      if (address) {
+        updatedOrder.pickup_location = { ...updatedOrder.pickup_location, address };
       }
+    }
+    if (userMessage.includes('送达') || userMessage.includes('送到') || userMessage.includes('到')) {
+      const address = userMessage.replace(/送达地点[：:]?/, '').replace(/送到/, '').replace(/到/, '').trim();
+      if (address) {
+        updatedOrder.delivery_location = { ...updatedOrder.delivery_location, address };
+      }
+    }
+
+    setAiOrderData(updatedOrder);
+
+    // 检查是否还有缺失信息
+    const missingInfo: string[] = [];
+    if (!updatedOrder.pickup_location?.address || updatedOrder.pickup_location.address === '待确认') {
+      missingInfo.push('取货地点');
+    }
+    if (!updatedOrder.delivery_location?.address || updatedOrder.delivery_location.address === '待确认') {
+      missingInfo.push('送达地点');
+    }
+
+    if (missingInfo.length === 0) {
+      setAiConversations(prev => [...prev, {
+        role: 'assistant',
+        content: `好的，信息已更新。现在订单信息如下：\n\n📋 ${updatedOrder.title}\n💰 报酬：¥${updatedOrder.price}\n📍 取货：${updatedOrder.pickup_location?.address}\n📍 送达：${updatedOrder.delivery_location?.address}\n\n确认发布吗？请回复"确认"或"发布"。`
+      }]);
     } else {
-      setAiConversations(prev => [...prev, { 
-        role: 'assistant', 
-        content: '推荐失败，请稍后再试。' 
+      setAiConversations(prev => [...prev, {
+        role: 'assistant',
+        content: `好的，还需要您提供：\n${missingInfo.map((info, i) => `${i + 1}. ${info}`).join('\n')}\n\n或者直接说"确认发布"使用当前信息。`
       }]);
     }
   };
 
-  const handleAiChat = async (userMessage: string) => {
-    // 检查是否是补充信息
-    if (aiOrderData) {
-      // 解析用户补充的信息
-      if (userMessage.includes('取货') || userMessage.includes('从')) {
-        aiOrderData.pickup_location = { ...aiOrderData.pickup_location, address: userMessage.replace('取货地点：', '').replace('从', '') };
-      }
-      if (userMessage.includes('送达') || userMessage.includes('到')) {
-        aiOrderData.delivery_location = { ...aiOrderData.delivery_location, address: userMessage.replace('送达地点：', '').replace('到', '') };
-      }
-      if (userMessage === '确认发布') {
-        const createRes = await Network.request({
-          url: '/api/orders',
-          method: 'POST',
-          data: aiOrderData,
-        });
+  // 确认发布订单
+  const confirmPublishOrder = async () => {
+    if (!aiOrderData) {
+      setAiConversations(prev => [...prev, {
+        role: 'assistant',
+        content: '请先告诉我您想发布什么订单。'
+      }]);
+      return;
+    }
 
-        if (createRes.data?.code === 200) {
-          setAiConversations(prev => [...prev, {
-            role: 'assistant',
-            content: `✅ 订单发布成功！\n\n📋 ${aiOrderData.title}\n💰 报酬：¥${aiOrderData.price}\n\n您可以在"我的订单"中查看详情。`
-          }]);
-          setAiOrderData(null);
-          loadOrders();
-        }
-        return;
+    try {
+      const createRes = await Network.request({
+        url: '/api/orders',
+        method: 'POST',
+        data: aiOrderData,
+      });
+
+      if (createRes.data?.code === 200) {
+        setAiConversations(prev => [...prev, {
+          role: 'assistant',
+          content: `✅ 订单发布成功！\n\n📋 ${aiOrderData.title}\n💰 报酬：¥${aiOrderData.price}\n📍 取货：${aiOrderData.pickup_location?.address}\n📍 送达：${aiOrderData.delivery_location?.address}\n\n您可以在"我的订单"中查看详情。`
+        }]);
+        setAiOrderData(null);
+        loadOrders();
+      } else {
+        setAiConversations(prev => [...prev, {
+          role: 'assistant',
+          content: '订单创建失败，请检查信息后重试。'
+        }]);
       }
+    } catch (error) {
+      console.error('确认发布失败:', error);
+      setAiConversations(prev => [...prev, {
+        role: 'assistant',
+        content: '订单创建失败，请稍后重试。'
+      }]);
+    }
+  };
+
+  const handleAiRecommendFlow = async (userMessage: string) => {
+    try {
+      const res = await Network.request({
+        url: '/api/ai/recommend',
+        method: 'POST',
+        data: {
+          userDescription: userMessage,
+          userLatitude: userLocation?.latitude,
+          userLongitude: userLocation?.longitude,
+        },
+      });
+
+      if (res.data?.code === 200) {
+        const recommendations = res.data.data;
+        if (recommendations && recommendations.length > 0) {
+          let responseText = '为您找到以下合适的订单：\n\n';
+          recommendations.forEach((rec: any, index: number) => {
+            responseText += `${index + 1}. ${rec.matchReason}\n   匹配度：${rec.matchScore}%\n\n`;
+          });
+          responseText += '您可以在"订单大厅"中查看并接单。';
+          setAiConversations(prev => [...prev, { role: 'assistant', content: responseText }]);
+        } else {
+          setAiConversations(prev => [...prev, { 
+            role: 'assistant', 
+            content: '暂时没有找到合适的订单，您可以稍后再试或去"订单大厅"查看所有订单。' 
+          }]);
+        }
+      } else {
+        setAiConversations(prev => [...prev, { 
+          role: 'assistant', 
+          content: '推荐失败，请稍后再试。' 
+        }]);
+      }
+    } catch (error) {
+      console.error('推荐订单失败:', error);
+      setAiConversations(prev => [...prev, { 
+        role: 'assistant', 
+        content: '推荐失败，请去"订单大厅"查看所有订单。' 
+      }]);
+    }
+  };
+
+  // 备用处理逻辑
+  const handleAiFallback = async (userMessage: string) => {
+    // 检查是否是确认发布
+    if (aiOrderData && (userMessage === '确认' || userMessage === '发布' || userMessage === '确认发布')) {
+      await confirmPublishOrder();
+      return;
     }
 
     // 默认回复
     setAiConversations(prev => [...prev, {
       role: 'assistant',
-      content: '我可以帮您：\n\n1. 发布订单 - 告诉我"我想发布一个代拿快递的订单"\n2. 推荐订单 - 告诉我"帮我推荐合适的订单"\n\n请问您需要什么帮助？'
+      content: '我可以帮您：\n\n1. 发布订单 - 告诉我"我想找人帮我拿快递"或"发布一个代取外卖的订单"\n2. 推荐订单 - 告诉我"帮我推荐合适的订单"\n\n请问您需要什么帮助？'
     }]);
   };
 

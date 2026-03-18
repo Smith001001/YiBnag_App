@@ -135,9 +135,9 @@ const ProfilePage = () => {
     {
       icon: Award,
       title: '历史记录',
-      subtitle: '查看所有订单历史',
+      subtitle: '查看已完成和已取消的订单',
       onClick: () => {
-        Taro.switchTab({ url: '/pages/my-orders/index' });
+        Taro.navigateTo({ url: '/pages/history/index' });
       },
     },
     {

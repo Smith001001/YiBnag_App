@@ -129,6 +129,8 @@ ${ordersText}
 - title: 订单标题（简短描述）
 - description: 详细描述
 - price: 预估价格（数字）
+- pickup_address: 取货地点（如果能从描述中提取）
+- delivery_address: 送达地点（如果能从描述中提取）
 
 示例：
 输入："帮忙拿一个快递到图书馆，愿意出5块钱"
@@ -137,7 +139,9 @@ ${ordersText}
   "type": "delivery_pickup",
   "title": "代拿快递",
   "description": "帮忙拿一个快递到图书馆",
-  "price": 5
+  "price": 5,
+  "pickup_address": null,
+  "delivery_address": "图书馆"
 }`;
 
     const userMessage = `用户描述：${text}
@@ -155,13 +159,21 @@ ${ordersText}
 
       const parsed = this.parseAIResponse(response.content);
 
+      // 使用解析出的地址，如果没有则使用默认值
+      const finalPickupLocation = parsed.pickup_address 
+        ? { ...pickupLocation, address: parsed.pickup_address }
+        : pickupLocation;
+      const finalDeliveryLocation = parsed.delivery_address 
+        ? { ...deliveryLocation, address: parsed.delivery_address }
+        : deliveryLocation;
+
       return {
         publisher_id: publisherId,
         type: parsed.type || 'other',
         title: parsed.title || '未命名订单',
-        description: text,
-        pickup_location: pickupLocation,
-        delivery_location: deliveryLocation,
+        description: parsed.description || text,
+        pickup_location: finalPickupLocation,
+        delivery_location: finalDeliveryLocation,
         price: parsed.price || 5,
         images: [],
       };
@@ -177,6 +189,91 @@ ${ordersText}
         delivery_location: deliveryLocation,
         price: 5,
         images: [],
+      };
+    }
+  }
+
+  /**
+   * 理解用户意图
+   * @param message 用户消息
+   * @param context 对话上下文
+   * @returns 意图识别结果
+   */
+  async understandIntent(message: string, context: Array<{ role: string; content: string }> = []): Promise<{
+    intent: 'publish_order' | 'recommend_order' | 'chat' | 'confirm' | 'provide_info';
+    confidence: number;
+    extractedInfo: {
+      type?: string;
+      title?: string;
+      description?: string;
+      price?: number;
+      pickupAddress?: string;
+      deliveryAddress?: string;
+    };
+    response: string;
+  }> {
+    const contextStr = context.length > 0 
+      ? `\n\n对话历史：\n${context.map(c => `${c.role === 'user' ? '用户' : '助手'}: ${c.content}`).join('\n')}`
+      : '';
+
+    const systemPrompt = `你是一个校园互助平台的智能助手。你需要理解用户的意图并给出合适的回复。
+
+用户可能的意图：
+1. publish_order - 用户想发布一个订单（如："我想发布订单"、"帮我找人拿快递"、"有人能帮我带份外卖吗"）
+2. recommend_order - 用户想找订单接单（如："推荐订单"、"有什么单子"、"帮我找合适的订单"）
+3. confirm - 用户确认信息（如："确认"、"好的"、"发布"、"是的"）
+4. provide_info - 用户在补充订单信息（如提供地址、价格等）
+5. chat - 普通对话或问候
+
+请以 JSON 格式返回：
+{
+  "intent": "意图类型",
+  "confidence": 0.95,
+  "extractedInfo": {
+    "type": "订单类型（delivery_pickup/delivery_food/errand/other）",
+    "title": "订单标题",
+    "description": "详细描述",
+    "price": 价格数字,
+    "pickupAddress": "取货地点",
+    "deliveryAddress": "送达地点"
+  },
+  "response": "给用户的回复，要友好自然"
+}
+
+重要提示：
+- 即使表达方式不同，也要正确识别意图。比如"有人能帮我拿快递吗"是发布订单意图
+- 如果用户在描述订单需求，提取相关信息
+- 回复要简洁友好，如果是发布订单意图且信息不完整，引导用户补充
+- 如果是推荐订单意图，告诉用户正在为他推荐`;
+
+    const userMessage = `用户消息：${message}${contextStr}
+
+请分析用户意图并回复。`;
+
+    try {
+      const response = await this.llmClient.invoke([
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage },
+      ], {
+        model: 'doubao-seed-1-8-251228',
+        temperature: 0.3,
+      });
+
+      const parsed = this.parseAIResponse(response.content);
+      
+      return {
+        intent: parsed.intent || 'chat',
+        confidence: parsed.confidence || 0.8,
+        extractedInfo: parsed.extractedInfo || {},
+        response: parsed.response || '抱歉，我没太理解您的意思，您可以说"帮我发布订单"或"推荐订单"。',
+      };
+    } catch (error) {
+      console.error('AI 意图识别失败:', error);
+      return {
+        intent: 'chat',
+        confidence: 0.5,
+        extractedInfo: {},
+        response: '抱歉，我遇到了一些问题，请稍后再试。',
       };
     }
   }

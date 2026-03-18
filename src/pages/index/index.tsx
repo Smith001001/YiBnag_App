@@ -1,5 +1,5 @@
 import { View, Text } from '@tarojs/components';
-import Taro from '@tarojs/taro';
+import Taro, { getEnv, ENV_TYPE } from '@tarojs/taro';
 import { useState, useEffect } from 'react';
 import { Network } from '@/network';
 import { Button } from '@/components/ui/button';
@@ -7,7 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { MapPin, ShoppingBag, Sparkles } from 'lucide-react-taro';
+import { MapPin, ShoppingBag, Sparkles, Package, Utensils } from 'lucide-react-taro';
 import './index.css';
 
 type Order = {
@@ -37,12 +37,21 @@ type UserInfo = {
   avatar: string;
 };
 
+const ORDER_TYPES = [
+  { value: 'all', label: '全部', icon: ShoppingBag },
+  { value: 'delivery_pickup', label: '代拿快递', icon: Package },
+  { value: 'delivery_food', label: '代取外卖', icon: Utensils },
+];
+
 const IndexPage = () => {
   const [activeTab, setActiveTab] = useState('orders');
   const [orders, setOrders] = useState<Order[]>([]);
+  const [filteredOrders, setFilteredOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [selectedType, setSelectedType] = useState('all');
+  const [locationStatus, setLocationStatus] = useState<'pending' | 'success' | 'failed'>('pending');
 
   // 订单表单
   const [orderForm, setOrderForm] = useState({
@@ -51,6 +60,7 @@ const IndexPage = () => {
     price: '',
     pickupLocation: '',
     deliveryLocation: '',
+    type: 'delivery_pickup',
   });
 
   // AI 助手
@@ -58,15 +68,37 @@ const IndexPage = () => {
   const [aiResponse, setAiResponse] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
 
+  const isWeapp = getEnv() === ENV_TYPE.WEAPP;
+
   useEffect(() => {
     initUser();
     loadOrders();
-    getLocation();
+    requestLocation();
   }, []);
+
+  useEffect(() => {
+    filterOrders();
+  }, [orders, selectedType]);
+
+  const filterOrders = () => {
+    if (selectedType === 'all') {
+      setFilteredOrders(orders);
+    } else {
+      setFilteredOrders(orders.filter(order => order.type === selectedType));
+    }
+  };
 
   const initUser = async () => {
     try {
-      const openid = 'test-user-' + Date.now();
+      // 先从本地存储获取用户信息
+      const storedUser = Taro.getStorageSync('userInfo');
+      if (storedUser) {
+        setUserInfo(JSON.parse(storedUser));
+        return;
+      }
+
+      // 创建新用户
+      const openid = 'user-' + Date.now();
       const res = await Network.request({
         url: '/api/users/get-or-create',
         method: 'POST',
@@ -74,22 +106,64 @@ const IndexPage = () => {
       });
 
       if (res.data.code === 200) {
-        setUserInfo(res.data.data);
+        const user = res.data.data;
+        setUserInfo(user);
+        Taro.setStorageSync('userInfo', JSON.stringify(user));
       }
     } catch (error) {
       console.error('初始化用户失败:', error);
     }
   };
 
+  const requestLocation = async () => {
+    if (isWeapp) {
+      // 微信小程序：先检查权限
+      try {
+        const setting = await Taro.getSetting();
+        if (setting.authSetting['scope.userLocation'] === false) {
+          // 用户已拒绝，引导去设置页
+          const { confirm } = await Taro.showModal({
+            title: '需要位置权限',
+            content: '请在设置中开启位置权限，以便获取附近订单',
+          });
+          if (confirm) {
+            await Taro.openSetting();
+            getLocation();
+          } else {
+            setLocationStatus('failed');
+            loadOrders();
+          }
+        } else {
+          // 未授权或已授权，直接获取位置
+          await getLocation();
+        }
+      } catch (error) {
+        console.error('检查位置权限失败:', error);
+        setLocationStatus('failed');
+        loadOrders();
+      }
+    } else {
+      // H5 或其他平台
+      await getLocation();
+    }
+  };
+
   const getLocation = async () => {
     try {
+      setLocationStatus('pending');
       const location = await Taro.getLocation({ type: 'gcj02' });
       setUserLocation({
         latitude: location.latitude,
         longitude: location.longitude,
       });
+      setLocationStatus('success');
+      // 获取位置后重新加载订单（按距离排序）
+      loadOrders();
     } catch (error) {
-      console.log('获取位置失败:', error);
+      console.error('获取位置失败:', error);
+      setLocationStatus('failed');
+      Taro.showToast({ title: '获取位置失败', icon: 'none' });
+      loadOrders();
     }
   };
 
@@ -132,7 +206,7 @@ const IndexPage = () => {
         method: 'POST',
         data: {
           publisherId: userInfo.id,
-          type: 'other',
+          type: orderForm.type,
           title: orderForm.title,
           description: orderForm.description,
           price: parseFloat(orderForm.price),
@@ -144,7 +218,14 @@ const IndexPage = () => {
 
       if (res.data && res.data.code === 200) {
         Taro.showToast({ title: '发布成功', icon: 'success' });
-        setOrderForm({ title: '', description: '', price: '', pickupLocation: '', deliveryLocation: '' });
+        setOrderForm({ 
+          title: '', 
+          description: '', 
+          price: '', 
+          pickupLocation: '', 
+          deliveryLocation: '',
+          type: 'delivery_pickup',
+        });
         setActiveTab('orders');
         loadOrders();
       } else {
@@ -274,8 +355,13 @@ const IndexPage = () => {
     }
   };
 
+  const getOrderTypeLabel = (type: string) => {
+    const typeObj = ORDER_TYPES.find(t => t.value === type);
+    return typeObj ? typeObj.label : '其他';
+  };
+
   return (
-    <View className="w-full h-full bg-gray-50">
+    <View className="w-full min-h-screen bg-gray-50">
       <View className="bg-gradient-to-b from-blue-500 to-blue-600 p-6 text-white">
         <Text className="block text-2xl font-bold mb-2">校园互助平台</Text>
         <Text className="block text-sm opacity-90">
@@ -297,37 +383,71 @@ const IndexPage = () => {
         </TabsList>
 
         <TabsContent value="orders" className="mt-4">
-          <View className="flex items-center gap-2 mb-4">
-            <Button
-              size="sm"
-              onClick={getLocation}
-              className="bg-green-500 text-white"
-            >
-              <MapPin size={16} color="white" />
-              <Text className="ml-2">{userLocation ? '重新定位' : '获取位置'}</Text>
-            </Button>
-            <Text className="text-sm text-gray-600">
-              {userLocation ? '已获取位置，按距离排序' : '未定位'}
+          {/* 定位和筛选 */}
+          <View className="flex items-center justify-between mb-4">
+            <View className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={requestLocation}
+                className={`text-white ${locationStatus === 'success' ? 'bg-green-500' : 'bg-blue-500'}`}
+              >
+                <MapPin size={16} color="white" />
+                <Text className="ml-2">
+                  {locationStatus === 'success' ? '已定位' : locationStatus === 'failed' ? '重新定位' : '获取位置'}
+                </Text>
+              </Button>
+            </View>
+            <Text className="text-xs text-gray-500">
+              {userLocation ? '按距离排序' : '未定位'}
             </Text>
+          </View>
+
+          {/* 订单类型筛选 */}
+          <View className="flex gap-2 mb-4 overflow-x-auto">
+            {ORDER_TYPES.map((type) => {
+              const Icon = type.icon;
+              return (
+                <Button
+                  key={type.value}
+                  size="sm"
+                  className={`flex-shrink-0 ${selectedType === type.value ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-700'}`}
+                  onClick={() => setSelectedType(type.value)}
+                >
+                  <Icon size={14} color={selectedType === type.value ? 'white' : '#374151'} />
+                  <Text className="ml-1">{type.label}</Text>
+                </Button>
+              );
+            })}
           </View>
 
           {loading ? (
             <View className="text-center py-8">
               <Text className="text-gray-500">加载中...</Text>
             </View>
-          ) : orders.length === 0 ? (
+          ) : filteredOrders.length === 0 ? (
             <Card>
               <CardContent className="p-8 text-center">
                 <ShoppingBag size={48} className="mx-auto text-gray-400 mb-4" />
-                <Text className="block text-gray-500">暂无订单</Text>
+                <Text className="block text-gray-500">
+                  {selectedType === 'all' ? '暂无订单' : `暂无${getOrderTypeLabel(selectedType)}订单`}
+                </Text>
               </CardContent>
             </Card>
           ) : (
-            orders.map((order) => (
+            filteredOrders.map((order) => (
               <Card key={order.id} className="mb-3">
                 <CardContent className="p-4">
                   <View className="flex justify-between items-start mb-2">
-                    <Text className="block font-semibold text-base">{order.title}</Text>
+                    <View className="flex items-center gap-2">
+                      {order.type === 'delivery_pickup' ? (
+                        <Package size={16} color="#3B82F6" />
+                      ) : order.type === 'delivery_food' ? (
+                        <Utensils size={16} color="#F59E0B" />
+                      ) : (
+                        <ShoppingBag size={16} color="#6B7280" />
+                      )}
+                      <Text className="block font-semibold text-base">{order.title}</Text>
+                    </View>
                     <Text className="block text-red-500 font-bold">¥{order.price}</Text>
                   </View>
                   <Text className="block text-sm text-gray-600 mb-3">{order.description}</Text>
@@ -358,61 +478,79 @@ const IndexPage = () => {
         <TabsContent value="publish" className="mt-4">
           <Card>
             <CardContent className="p-4">
+              {/* 订单类型选择 */}
+              <View className="mb-4">
+                <Text className="block text-sm font-medium mb-2">订单类型</Text>
+                <View className="flex gap-2">
+                  <Button
+                    size="sm"
+                    className={`flex-1 ${orderForm.type === 'delivery_pickup' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700'}`}
+                    onClick={() => setOrderForm({ ...orderForm, type: 'delivery_pickup' })}
+                  >
+                    <Package size={16} color={orderForm.type === 'delivery_pickup' ? 'white' : '#374151'} />
+                    <Text className="ml-2">代拿快递</Text>
+                  </Button>
+                  <Button
+                    size="sm"
+                    className={`flex-1 ${orderForm.type === 'delivery_food' ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-700'}`}
+                    onClick={() => setOrderForm({ ...orderForm, type: 'delivery_food' })}
+                  >
+                    <Utensils size={16} color={orderForm.type === 'delivery_food' ? 'white' : '#374151'} />
+                    <Text className="ml-2">代取外卖</Text>
+                  </Button>
+                </View>
+              </View>
+
               <View className="mb-4">
                 <Text className="block text-sm font-medium mb-2">订单标题</Text>
-                <View className="bg-gray-50 rounded-lg p-3">
-                  <Input
-                    placeholder="请输入订单标题"
-                    value={orderForm.title}
-                    onInput={(e) => setOrderForm({ ...orderForm, title: e.detail.value })}
-                  />
-                </View>
+                <Input
+                  className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2"
+                  placeholder="请输入订单标题"
+                  value={orderForm.title}
+                  onInput={(e) => setOrderForm({ ...orderForm, title: e.detail.value })}
+                />
               </View>
 
               <View className="mb-4">
                 <Text className="block text-sm font-medium mb-2">详细描述</Text>
-                <View className="bg-gray-50 rounded-lg p-3">
-                  <Textarea
-                    style={{ width: '100%', minHeight: '100px', backgroundColor: 'transparent' }}
-                    placeholder="请详细描述订单内容"
-                    value={orderForm.description}
-                    onInput={(e) => setOrderForm({ ...orderForm, description: e.detail.value })}
-                  />
-                </View>
+                <Textarea
+                  className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 w-full"
+                  style={{ minHeight: '80px' }}
+                  placeholder="请详细描述订单内容"
+                  value={orderForm.description}
+                  onInput={(e) => setOrderForm({ ...orderForm, description: e.detail.value })}
+                />
               </View>
 
               <View className="mb-4">
                 <Text className="block text-sm font-medium mb-2">取货地点</Text>
-                <View className="bg-gray-50 rounded-lg p-3">
-                  <Input
-                    placeholder="请输入取货地点"
-                    value={orderForm.pickupLocation}
-                    onInput={(e) => setOrderForm({ ...orderForm, pickupLocation: e.detail.value })}
-                  />
-                </View>
+                <Input
+                  className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2"
+                  placeholder="请输入取货地点"
+                  value={orderForm.pickupLocation}
+                  onInput={(e) => setOrderForm({ ...orderForm, pickupLocation: e.detail.value })}
+                />
               </View>
 
               <View className="mb-4">
                 <Text className="block text-sm font-medium mb-2">送达地点</Text>
-                <View className="bg-gray-50 rounded-lg p-3">
-                  <Input
-                    placeholder="请输入送达地点"
-                    value={orderForm.deliveryLocation}
-                    onInput={(e) => setOrderForm({ ...orderForm, deliveryLocation: e.detail.value })}
-                  />
-                </View>
+                <Input
+                  className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2"
+                  placeholder="请输入送达地点"
+                  value={orderForm.deliveryLocation}
+                  onInput={(e) => setOrderForm({ ...orderForm, deliveryLocation: e.detail.value })}
+                />
               </View>
 
               <View className="mb-4">
                 <Text className="block text-sm font-medium mb-2">报酬（元）</Text>
-                <View className="bg-gray-50 rounded-lg p-3">
-                  <Input
-                    type="number"
-                    placeholder="请输入报酬金额"
-                    value={orderForm.price}
-                    onInput={(e) => setOrderForm({ ...orderForm, price: e.detail.value })}
-                  />
-                </View>
+                <Input
+                  className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2"
+                  type="number"
+                  placeholder="请输入报酬金额"
+                  value={orderForm.price}
+                  onInput={(e) => setOrderForm({ ...orderForm, price: e.detail.value })}
+                />
               </View>
 
               <Button
@@ -433,14 +571,13 @@ const IndexPage = () => {
                 <Text className="block font-semibold">AI 智能助手</Text>
               </View>
 
-              <View className="bg-gray-50 rounded-lg p-3 mb-4">
-                <Textarea
-                  style={{ width: '100%', minHeight: '100px', backgroundColor: 'transparent' }}
-                  placeholder="输入你的需求，让 AI 帮你找到合适的订单，或者用自然语言发布订单..."
-                  value={aiMessage}
-                  onInput={(e) => setAiMessage(e.detail.value)}
-                />
-              </View>
+              <Textarea
+                className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 w-full mb-4"
+                style={{ minHeight: '80px' }}
+                placeholder="输入你的需求，让 AI 帮你找到合适的订单，或者用自然语言发布订单..."
+                value={aiMessage}
+                onInput={(e) => setAiMessage(e.detail.value)}
+              />
 
               <View className="flex gap-2 mb-4">
                 <Button

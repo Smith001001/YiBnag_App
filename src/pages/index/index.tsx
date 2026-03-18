@@ -72,6 +72,8 @@ const IndexPage = () => {
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiOrderData, setAiOrderData] = useState<any>(null);
+  const [aiPendingOrderId, setAiPendingOrderId] = useState<string | null>(null); // AI助手待确认接单的订单ID
+  const [aiRecommendations, setAiRecommendations] = useState<any[]>([]); // AI推荐的订单列表
 
   const isWeapp = getEnv() === ENV_TYPE.WEAPP;
 
@@ -313,17 +315,23 @@ const IndexPage = () => {
             await handleAiPublishFlow(userMessage, extractedInfo, response);
             break;
           case 'recommend_order':
-            // 推荐订单意图
-            setAiConversations(prev => [...prev, { role: 'assistant', content: response }]);
+            // 推荐订单意图 - 不单独添加 response，由 handleAiRecommendFlow 统一处理
             await handleAiRecommendFlow(userMessage);
             break;
+          case 'accept_order':
+            // 接单意图
+            await handleAiAcceptOrder(extractedInfo, response);
+            break;
           case 'confirm':
-            // 确认发布订单
+            // 确认操作（发布订单或接单）
             if (aiOrderData) {
               setAiConversations(prev => [...prev, { role: 'assistant', content: '好的，正在为您发布订单...' }]);
               await confirmPublishOrder();
+            } else if (aiPendingOrderId) {
+              // 确认接单
+              await confirmAcceptOrder();
             } else {
-              setAiConversations(prev => [...prev, { role: 'assistant', content: '请先告诉我您想发布什么订单，比如"帮我找人拿快递"。' }]);
+              setAiConversations(prev => [...prev, { role: 'assistant', content: '请先告诉我您想做什么操作，比如"推荐订单"或"我想发布订单"。' }]);
             }
             break;
           case 'cancel':
@@ -331,6 +339,9 @@ const IndexPage = () => {
             if (aiOrderData) {
               setAiOrderData(null);
               setAiConversations(prev => [...prev, { role: 'assistant', content: '好的，已取消发布订单。有其他需要帮助的吗？' }]);
+            } else if (aiPendingOrderId) {
+              setAiPendingOrderId(null);
+              setAiConversations(prev => [...prev, { role: 'assistant', content: '好的，已取消接单。有其他需要帮助的吗？' }]);
             } else {
               setAiConversations(prev => [...prev, { role: 'assistant', content: response }]);
             }
@@ -640,6 +651,9 @@ const IndexPage = () => {
       if (res.data?.code === 200) {
         const recommendations = res.data.data;
         if (recommendations && recommendations.length > 0) {
+          // 保存推荐列表
+          setAiRecommendations(recommendations);
+          
           // 后端已返回完整订单信息，直接使用
           let responseText = '为您找到以下合适的订单：\n\n';
           recommendations.forEach((rec: any, index: number) => {
@@ -647,18 +661,19 @@ const IndexPage = () => {
             responseText += `   📦 类型：${rec.type}\n`;
             responseText += `   📍 ${rec.pickupAddress} → ${rec.deliveryAddress}\n`;
             responseText += `   💰 报酬：¥${rec.price}\n`;
-            responseText += `   📊 匹配度：${rec.matchScore}%\n`;
-            responseText += `   💡 ${rec.matchReason}\n\n`;
+            responseText += `   📊 匹配度：${rec.matchScore}%\n\n`;
           });
-          responseText += '您可以在"订单大厅"中查看并接单。';
+          responseText += '回复"接第X单"可以直接接单，比如"接第1单"';
           setAiConversations(prev => [...prev, { role: 'assistant', content: responseText }]);
         } else {
+          setAiRecommendations([]);
           setAiConversations(prev => [...prev, { 
             role: 'assistant', 
             content: '暂时没有找到合适的订单，您可以稍后再试或去"订单大厅"查看所有订单。' 
           }]);
         }
       } else {
+        setAiRecommendations([]);
         setAiConversations(prev => [...prev, { 
           role: 'assistant', 
           content: '推荐失败，请稍后再试。' 
@@ -666,9 +681,88 @@ const IndexPage = () => {
       }
     } catch (error) {
       console.error('推荐订单失败:', error);
+      setAiRecommendations([]);
       setAiConversations(prev => [...prev, { 
         role: 'assistant', 
         content: '推荐失败，请去"订单大厅"查看所有订单。' 
+      }]);
+    }
+  };
+
+  // AI助手接单处理
+  const handleAiAcceptOrder = async (extractedInfo: any, _response: string) => {
+    const orderIndex = extractedInfo?.orderIndex;
+    
+    if (!orderIndex || orderIndex < 1 || orderIndex > aiRecommendations.length) {
+      setAiConversations(prev => [...prev, { 
+        role: 'assistant', 
+        content: '请告诉我您想接第几个订单？比如"接第1单"' 
+      }]);
+      return;
+    }
+
+    const order = aiRecommendations[orderIndex - 1];
+    if (!order) {
+      setAiConversations(prev => [...prev, { 
+        role: 'assistant', 
+        content: '找不到该订单，请重新选择。' 
+      }]);
+      return;
+    }
+
+    // 保存待确认的订单ID
+    setAiPendingOrderId(order.orderId);
+    
+    const confirmText = `您选择的订单：\n\n${order.title}\n📦 类型：${order.type}\n📍 ${order.pickupAddress} → ${order.deliveryAddress}\n💰 报酬：¥${order.price}\n\n确认接单吗？回复"确认"接单，回复"取消"放弃。`;
+    setAiConversations(prev => [...prev, { role: 'assistant', content: confirmText }]);
+  };
+
+  // 确认接单
+  const confirmAcceptOrder = async () => {
+    if (!aiPendingOrderId) {
+      setAiConversations(prev => [...prev, { 
+        role: 'assistant', 
+        content: '请先选择要接的订单。' 
+      }]);
+      return;
+    }
+
+    if (!userInfo) {
+      setAiConversations(prev => [...prev, { 
+        role: 'assistant', 
+        content: '请先登录后再接单。' 
+      }]);
+      return;
+    }
+
+    try {
+      const res = await Network.request({
+        url: `/api/orders/${aiPendingOrderId}/accept`,
+        method: 'POST',
+        data: { accepterId: userInfo.id },
+      });
+
+      console.log('AI接单响应:', res.data);
+
+      if (res.data?.code === 200) {
+        setAiConversations(prev => [...prev, { 
+          role: 'assistant', 
+          content: '✅ 接单成功！您可以在"我的订单"中查看详情。' 
+        }]);
+        setAiPendingOrderId(null);
+        setAiRecommendations([]);
+        loadOrders();
+      } else {
+        setAiConversations(prev => [...prev, { 
+          role: 'assistant', 
+          content: `接单失败：${res.data?.msg || '请稍后重试'}` 
+        }]);
+      }
+    } catch (error) {
+      console.error('AI接单失败:', error);
+      setAiConversations(prev => [...prev, { 
+        role: 'assistant', 
+        content: '接单失败，请稍后重试。' 
       }]);
     }
   };

@@ -248,7 +248,7 @@ ${ordersText}
    * @returns 意图识别结果
    */
   async understandIntent(message: string, context: Array<{ role: string; content: string }> = []): Promise<{
-    intent: 'publish_order' | 'recommend_order' | 'chat' | 'confirm' | 'provide_info' | 'cancel' | 'modify';
+    intent: 'publish_order' | 'recommend_order' | 'chat' | 'confirm' | 'provide_info' | 'cancel' | 'modify' | 'accept_order';
     confidence: number;
     extractedInfo: {
       type?: string;
@@ -257,6 +257,7 @@ ${ordersText}
       price?: number;
       pickupAddress?: string;
       deliveryAddress?: string;
+      orderIndex?: number;
     };
     response: string;
   }> {
@@ -268,12 +269,13 @@ ${ordersText}
 
 用户可能的意图：
 1. publish_order - 用户想发布一个订单（如："我想发布订单"、"帮我找人拿快递"、"有人能帮我带份外卖吗"、"帮我拿个快递"）
-2. recommend_order - 用户想找订单接单（如："推荐订单"、"有什么单子"、"帮我找合适的订单"）
-3. confirm - 用户确认发布订单（如："确认"、"好的"、"发布"、"是的"、"确认发布"）
-4. cancel - 用户取消操作（如："取消"、"不要了"）
-5. modify - 用户想修改信息（如："修改"、"改一下"）
-6. provide_info - 用户在补充订单信息（如提供地址、价格等）
-7. chat - 普通对话或问候
+2. recommend_order - 用户想找订单接单（如："推荐订单"、"有什么单子"、"帮我找合适的订单"、"给我推荐订单"）
+3. accept_order - 用户想接单（如："接第1单"、"我要接第2个订单"、"我想接第三个"、"接单"）
+4. confirm - 用户确认操作（如："确认"、"好的"、"发布"、"是的"、"确认发布"、"确认接单"）
+5. cancel - 用户取消操作（如："取消"、"不要了"）
+6. modify - 用户想修改信息（如："修改"、"改一下"）
+7. provide_info - 用户在补充订单信息（如提供地址、价格等）
+8. chat - 普通对话或问候
 
 请以 JSON 格式返回：
 {
@@ -285,7 +287,8 @@ ${ordersText}
     "description": "详细描述（提炼用户的核心需求）",
     "price": 价格数字（必须是用户明确提到的数字，如果用户没说价格则不要填写！）,
     "pickupAddress": "取货地点（只提取用户明确提到的地点名称）",
-    "deliveryAddress": "送达地点（只提取用户明确提到的地点名称）"
+    "deliveryAddress": "送达地点（只提取用户明确提到的地点名称）",
+    "orderIndex": 订单序号（用户说"接第X单"时提取数字，如"接第1单"则orderIndex为1）
   },
   "response": "给用户的回复"
 }
@@ -298,22 +301,29 @@ ${ordersText}
    - 如果用户没说取货地点，pickupAddress 必须为 null
    - 如果用户没说送达地点，deliveryAddress 必须为 null
    - 绝对禁止自己编造、猜测或默认任何用户未提及的信息！
+   
+2. **接单意图识别**：
+   - "接第1单"、"接第2个"、"我要接第三个" → intent: "accept_order", orderIndex: 对应数字
+   - "接单"、"我要接单" → intent: "accept_order", orderIndex: null（需要用户指定）
+   
+3. **地点提取规则**：
 
-2. **地点提取规则**：
+3. **地点提取规则**：
    - "在图书馆取货，送到A教" → pickupAddress: "图书馆", deliveryAddress: "A教"
    - "帮我去食堂拿外卖送到宿舍" → pickupAddress: "食堂", deliveryAddress: "宿舍"
    - 如果只说"帮我拿快递"而没有提地点 → pickupAddress: null, deliveryAddress: null
 
-3. **价格提取规则**：
+4. **价格提取规则**：
    - "11块钱"、"5元"、"报酬10块" → price: 数字
    - 用户没提到价格 → price: null（不要填写默认值！）
 
-4. **意图识别**：
-   - "确认"/"发布"/"是的" → intent: "confirm"
+5. **意图识别规则**：
+   - "确认"/"发布"/"是的"/"确认接单" → intent: "confirm"
    - "取消" → intent: "cancel"
    - "修改" → intent: "modify"
+   - "接第1单"/"接第2个"/"我要接第三个" → intent: "accept_order", orderIndex: 对应数字
 
-5. **回复风格**：简洁友好，当信息不完整时引导用户补充`;
+6. **回复风格**：简洁友好，当信息不完整时引导用户补充`;
 
     const userMessage = `用户消息：${message}${contextStr}
 

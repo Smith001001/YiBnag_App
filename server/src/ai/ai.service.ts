@@ -200,7 +200,7 @@ ${ordersText}
    * @returns 意图识别结果
    */
   async understandIntent(message: string, context: Array<{ role: string; content: string }> = []): Promise<{
-    intent: 'publish_order' | 'recommend_order' | 'chat' | 'confirm' | 'provide_info';
+    intent: 'publish_order' | 'recommend_order' | 'chat' | 'confirm' | 'provide_info' | 'cancel' | 'modify';
     confidence: number;
     extractedInfo: {
       type?: string;
@@ -219,11 +219,13 @@ ${ordersText}
     const systemPrompt = `你是一个校园互助平台的智能助手。你需要理解用户的意图并给出合适的回复。
 
 用户可能的意图：
-1. publish_order - 用户想发布一个订单（如："我想发布订单"、"帮我找人拿快递"、"有人能帮我带份外卖吗"）
+1. publish_order - 用户想发布一个订单（如："我想发布订单"、"帮我找人拿快递"、"有人能帮我带份外卖吗"、"帮我拿个快递"）
 2. recommend_order - 用户想找订单接单（如："推荐订单"、"有什么单子"、"帮我找合适的订单"）
-3. confirm - 用户确认信息（如："确认"、"好的"、"发布"、"是的"）
-4. provide_info - 用户在补充订单信息（如提供地址、价格等）
-5. chat - 普通对话或问候
+3. confirm - 用户确认发布订单（如："确认"、"好的"、"发布"、"是的"、"确认发布"）
+4. cancel - 用户取消操作（如："取消"、"不要了"）
+5. modify - 用户想修改信息（如："修改"、"改一下"）
+6. provide_info - 用户在补充订单信息（如提供地址、价格等）
+7. chat - 普通对话或问候
 
 请以 JSON 格式返回：
 {
@@ -232,23 +234,27 @@ ${ordersText}
   "extractedInfo": {
     "type": "订单类型（delivery_pickup/delivery_food/errand/other）",
     "title": "订单标题",
-    "description": "详细描述",
-    "price": 价格数字,
-    "pickupAddress": "取货地点",
-    "deliveryAddress": "送达地点"
+    "description": "详细描述（不要重复用户输入，提炼核心需求）",
+    "price": 价格数字（纯数字）,
+    "pickupAddress": "取货地点（只提取地点名称，不要包含其他内容）",
+    "deliveryAddress": "送达地点（只提取地点名称，不要包含其他内容）"
   },
-  "response": "给用户的回复，要友好自然"
+  "response": "给用户的回复"
 }
 
-重要提示：
-- 即使表达方式不同，也要正确识别意图。比如"有人能帮我拿快递吗"是发布订单意图
-- 如果用户在描述订单需求，提取相关信息
-- 回复要简洁友好，如果是发布订单意图且信息不完整，引导用户补充
-- 如果是推荐订单意图，告诉用户正在为他推荐`;
+【重要规则】：
+1. 提取地点信息时，只返回地点名称，不要包含其他内容
+   - 正确示例："在图书馆取货，送到A教" → pickupAddress: "图书馆", deliveryAddress: "A教"
+   - 错误示例：pickupAddress: "在图书馆取货" ❌
+2. 价格只返回数字，不要带单位
+3. 如果用户说"确认"/"发布"/"是的"，intent 应该是 confirm
+4. 如果用户说"取消"，intent 应该是 cancel
+5. 如果用户说"修改"，intent 应该是 modify
+6. 回复要简洁友好`;
 
     const userMessage = `用户消息：${message}${contextStr}
 
-请分析用户意图并回复。`;
+请分析用户意图并返回JSON格式结果。`;
 
     try {
       const response = await this.llmClient.invoke([

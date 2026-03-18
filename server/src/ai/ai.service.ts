@@ -4,6 +4,11 @@ import { getSupabaseClient } from '@/storage/database/supabase-client';
 
 export interface OrderRecommendation {
   orderId: string;
+  title: string;
+  type: string;
+  price: number;
+  pickupAddress: string;
+  deliveryAddress: string;
   matchReason: string;
   matchScore: number;
 }
@@ -123,11 +128,18 @@ ${ordersText}
           // 验证订单ID是否真实存在
           if (validOrderIds.includes(orderId)) {
             const order = orderMap.get(orderId);
-            recommendations.push({
-              orderId: orderId,
-              matchReason: result.reasons?.[i] || `${order?.title}，报酬¥${order?.price}`,
-              matchScore: Math.min(100, Math.max(0, result.scores?.[i] || 70)),
-            });
+            if (order) {
+              recommendations.push({
+                orderId: orderId,
+                title: order.title,
+                type: this.translateOrderType(order.type),
+                price: order.price,
+                pickupAddress: order.pickup_location?.address || '未指定',
+                deliveryAddress: order.delivery_location?.address || '未指定',
+                matchReason: result.reasons?.[i] || `${order.title}，报酬¥${order.price}`,
+                matchScore: Math.min(100, Math.max(0, result.scores?.[i] || 70)),
+              });
+            }
           } else {
             console.warn(`AI返回了无效的订单ID: ${orderId}，已忽略`);
           }
@@ -140,6 +152,11 @@ ${ordersText}
       // 如果 AI 失败，返回前3个订单作为默认推荐
       return orders.slice(0, 3).map(order => ({
         orderId: order.id,
+        title: order.title,
+        type: this.translateOrderType(order.type),
+        price: order.price,
+        pickupAddress: order.pickup_location?.address || '未指定',
+        deliveryAddress: order.delivery_location?.address || '未指定',
         matchReason: `${order.title}，${order.pickup_location?.address || '待定'} → ${order.delivery_location?.address || '待定'}，报酬¥${order.price}`,
         matchScore: 60,
       }));

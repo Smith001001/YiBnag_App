@@ -162,15 +162,15 @@ const HistoryPage = () => {
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="p-4">
         <TabsList className="grid w-full grid-cols-3 mb-4">
-          <TabsTrigger value="published" className="data-[state=active]:bg-blue-500 data-[state=active]:text-white">
+          <TabsTrigger value="published">
             <Inbox size={14} className="mr-1" />
             我发布的 ({publishedOrders.length})
           </TabsTrigger>
-          <TabsTrigger value="accepted" className="data-[state=active]:bg-blue-500 data-[state=active]:text-white">
+          <TabsTrigger value="accepted">
             <Send size={14} className="mr-1" />
             我接的单 ({acceptedOrders.length})
           </TabsTrigger>
-          <TabsTrigger value="cancelled" className="data-[state=active]:bg-blue-500 data-[state=active]:text-white">
+          <TabsTrigger value="cancelled">
             <CircleX size={14} className="mr-1" />
             已取消 ({[...publishedOrders, ...acceptedOrders].filter(o => o.status === 'cancelled').length})
           </TabsTrigger>

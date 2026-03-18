@@ -296,10 +296,10 @@ const MyOrdersPage = () => {
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="p-4">
         <TabsList className="grid w-full grid-cols-2 mb-4">
-          <TabsTrigger value="accepted" className="data-[state=active]:bg-blue-500 data-[state=active]:text-white">
+          <TabsTrigger value="accepted">
             我接的单 ({acceptedOrders.length})
           </TabsTrigger>
-          <TabsTrigger value="published" className="data-[state=active]:bg-blue-500 data-[state=active]:text-white">
+          <TabsTrigger value="published">
             我发布的 ({publishedOrders.length})
           </TabsTrigger>
         </TabsList>

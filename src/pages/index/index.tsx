@@ -1,5 +1,5 @@
-import { View, Text } from '@tarojs/components';
-import Taro, { getEnv, ENV_TYPE } from '@tarojs/taro';
+import { View, Text, Textarea } from '@tarojs/components';
+import Taro, { getEnv, ENV_TYPE, useDidShow } from '@tarojs/taro';
 import { useState, useEffect, useCallback } from 'react';
 import { Network } from '@/network';
 import { Button } from '@/components/ui/button';
@@ -119,6 +119,13 @@ const IndexPage = () => {
   useEffect(() => {
     initUser();
   }, []);
+
+  // 页面显示时重新加载订单数据
+  useDidShow(() => {
+    if (userInfo) {
+      loadOrders();
+    }
+  });
 
   useEffect(() => {
     if (userInfo) {
@@ -763,34 +770,23 @@ const IndexPage = () => {
         },
       });
 
+      console.log('AI推荐响应:', res.data);
+
       if (res.data?.code === 200) {
         const recommendations = res.data.data;
         if (recommendations && recommendations.length > 0) {
-          // 获取推荐的订单ID列表
-          const recommendedOrderIds = recommendations.map((rec: any) => rec.orderId);
-          
-          // 从当前订单列表中找到对应的真实订单
-          const realOrders = orders.filter(o => recommendedOrderIds.includes(o.id));
-          
-          if (realOrders.length > 0) {
-            let responseText = '为您找到以下合适的订单：\n\n';
-            realOrders.forEach((order, index) => {
-              const rec = recommendations.find((r: any) => r.orderId === order.id);
-              responseText += `${index + 1}. ${order.title}\n`;
-              responseText += `   📍 ${order.pickup_location?.address} → ${order.delivery_location?.address}\n`;
-              responseText += `   💰 报酬：¥${order.price}\n`;
-              responseText += `   📊 匹配度：${rec?.matchScore || 70}%\n`;
-              responseText += `   💡 ${rec?.matchReason || '符合您的需求'}\n\n`;
-            });
-            responseText += '您可以在"订单大厅"中查看并接单。';
-            setAiConversations(prev => [...prev, { role: 'assistant', content: responseText }]);
-          } else {
-            // 如果找不到对应的真实订单，提示用户
-            setAiConversations(prev => [...prev, { 
-              role: 'assistant', 
-              content: '暂时没有找到完全匹配的订单，您可以去"订单大厅"查看所有可用订单。' 
-            }]);
-          }
+          // 后端已返回完整订单信息，直接使用
+          let responseText = '为您找到以下合适的订单：\n\n';
+          recommendations.forEach((rec: any, index: number) => {
+            responseText += `${index + 1}. ${rec.title}\n`;
+            responseText += `   📦 类型：${rec.type}\n`;
+            responseText += `   📍 ${rec.pickupAddress} → ${rec.deliveryAddress}\n`;
+            responseText += `   💰 报酬：¥${rec.price}\n`;
+            responseText += `   📊 匹配度：${rec.matchScore}%\n`;
+            responseText += `   💡 ${rec.matchReason}\n\n`;
+          });
+          responseText += '您可以在"订单大厅"中查看并接单。';
+          setAiConversations(prev => [...prev, { role: 'assistant', content: responseText }]);
         } else {
           setAiConversations(prev => [...prev, { 
             role: 'assistant', 
@@ -991,13 +987,13 @@ const IndexPage = () => {
 
               <View className="mb-4">
                 <Text className="block text-sm font-medium mb-2">详细描述</Text>
-                <View className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
-                  <Input
-                    className="w-full px-3 py-2 bg-transparent"
-                    style={{ minHeight: '80px' }}
+                <View className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                  <Textarea
+                    style={{ width: '100%', minHeight: '80px', backgroundColor: 'transparent' }}
                     placeholder="请详细描述订单内容"
                     value={orderForm.description}
                     onInput={(e) => setOrderForm({ ...orderForm, description: e.detail.value })}
+                    maxlength={500}
                   />
                 </View>
               </View>
